@@ -68,35 +68,63 @@ void ScannerService::startScan(const QStringList& rootPaths) {
 
 QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     const std::function<bool(qint64, const QString&)>& onProgress) {
-    QList<FileInfo> out;
-    qint64 scanned = 0;
+    // 并行扫描：先把各根目录展开成一级子目录分片，再 blockingMapped 多线程遍历。
+    // 磁盘根目录的一级子目录往往分布在不同目录树分支，并行度好。
+    QStringList shards;
     for (const QString& root : rootPaths) {
-        if (m_cancelRequested) break;
         if (!QFileInfo::exists(root)) continue;
-        QDirIterator it(root, QDir::Files | QDir::NoDotAndDotDot,
-                        QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            it.next();
-            const QFileInfo fi = it.fileInfo();
-            if (!fi.exists()) continue;
-            FileInfo info;
-            info.absolutePath = fi.absoluteFilePath();
-            info.name = fi.fileName();
-            info.size = fi.size();
-            info.lastModified = fi.lastModified().toMSecsSinceEpoch();
-            info.isDir = false;
-            info.isSymlink = fi.isSymLink();
-            info.extension = fi.suffix().isEmpty()
-                ? QString() : QLatin1Char('.') + fi.suffix().toLower();
-            out.append(info);
-            if (onProgress && (++scanned % 512 == 0)) {
-                if (!onProgress(scanned, info.absolutePath)) {
-                    m_cancelRequested = true;
-                    break;
-                }
-            }
+        const QStringList subDirs = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        if (subDirs.isEmpty()) {
+            shards << root;
+        } else {
+            for (const QString& sub : subDirs)
+                shards << root + QLatin1Char('/') + sub;
+            shards << root;   // 根层散文件
         }
     }
+
+    QAtomicInteger<qint64> scannedCount{0};
+    QAtomicInteger<bool> cancelled{false};
+
+    auto results = QtConcurrent::blockingMapped(shards,
+        [this, &cancelled, &scannedCount, &onProgress](const QString& shard) -> QList<FileInfo> {
+            QList<FileInfo> local;
+            local.reserve(1024);
+            QDirIterator it(shard, QDir::Files | QDir::NoDotAndDotDot,
+                            QDirIterator::Subdirectories);
+            int sinceReport = 0;
+            while (it.hasNext()) {
+                if (cancelled.loadRelaxed()) break;
+                it.next();
+                const QFileInfo fi = it.fileInfo();
+                if (!fi.exists()) continue;
+                FileInfo info;
+                info.absolutePath = fi.absoluteFilePath();
+                info.name = fi.fileName();
+                info.size = fi.size();
+                info.lastModified = fi.lastModified().toMSecsSinceEpoch();
+                info.isDir = false;
+                info.isSymlink = fi.isSymLink();
+                info.extension = fi.suffix().isEmpty()
+                    ? QString() : QLatin1Char('.') + fi.suffix().toLower();
+                local.append(info);
+                // 每线程每 256 个上报一次，线程安全累加
+                if (onProgress && ++sinceReport >= 256) {
+                    sinceReport = 0;
+                    const qint64 total = scannedCount.fetchAndAddRelaxed(256) + 256;
+                    if (!onProgress(total, info.absolutePath)) {
+                        cancelled.storeRelaxed(true);
+                        break;
+                    }
+                }
+            }
+            if (onProgress && sinceReport > 0)
+                scannedCount.fetchAndAddRelaxed(sinceReport);
+            return local;
+        });
+
+    QList<FileInfo> out;
+    for (const auto& r : results) out += r;
     return out;
 }
 
