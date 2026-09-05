@@ -11,6 +11,7 @@
 
 #include <QCheckBox>
 #include <QDateTime>
+#include <QTimer>
 #include <functional>
 #include <QComboBox>
 #include <QFileInfo>
@@ -148,8 +149,13 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_summary->setMaximumWidth(QWIDGETSIZE_MAX);
     m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // 实时计时标签（扫描中显示"已用时 X 秒"，参考 WizTree/TreeSize）
+    m_scanTimerLabel = new QLabel;
+    m_scanTimerLabel->setStyleSheet("color:#2B6CB0; font-weight:600; background:transparent;");
+    m_scanTimerLabel->hide();
     progressRow->addWidget(m_progress);
     progressRow->addWidget(m_summary, 1);
+    progressRow->addWidget(m_scanTimerLabel);
     root->addLayout(progressRow);
 
     // 结果表（可自由排序）
@@ -203,6 +209,17 @@ void BigFilePage::doScan() {
 
     QtConcurrent::run([this, targetDrive, filter, cancelled]() {
         const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
+        // 扫描中实时计时（参考 WizTree/TreeSize：状态栏显示已用时）
+        const auto tickTimer = new QTimer(this);
+        tickTimer->setParent(this);
+        connect(tickTimer, &QTimer::timeout, this, [this, startMs]() {
+            const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startMs;
+            m_scanTimerLabel->setText(tr("已用时 %1 秒").arg(QString::number(ms / 1000.0, 'f', 1)));
+        });
+        tickTimer->start(100);
+        QMetaObject::invokeMethod(this, [this]() {
+            m_scanTimerLabel->setText(tr("已用时 0.0 秒"));
+        }, Qt::QueuedConnection);
         ScannerService scanner;
         // 进度回调：更新忙碌条 + 汇总文本（跨线程→Queued）
         std::function<bool(qint64, const QString&)> onProgress =
@@ -240,6 +257,9 @@ void BigFilePage::doScan() {
               << " elapsedMs=" << (QDateTime::currentMSecsSinceEpoch() - startMs);
         // 经由 this 传递扫描耗时到 then 回调（原子写，跨线程安全）
         m_lastScanElapsedMs.store(QDateTime::currentMSecsSinceEpoch() - startMs);
+        QMetaObject::invokeMethod(this, [this]() { m_scanTimerLabel->hide(); }, Qt::QueuedConnection);
+        tickTimer->stop();
+        tickTimer->deleteLater();
         return result;
     }).then(this, [this](QList<FileInfo> result) {
         m_scanning = false;
@@ -248,6 +268,7 @@ void BigFilePage::doScan() {
         m_progress->setRange(0, 1);
         if (m_scanCancelled) {
             m_progress->setValue(0);
+            m_scanTimerLabel->hide();
             m_summary->setText(tr("扫描已取消"));
             m_scanBtn->setEnabled(true);
             return;

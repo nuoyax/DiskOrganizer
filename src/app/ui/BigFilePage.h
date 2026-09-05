@@ -36,6 +36,7 @@ private:
     QCheckBox* m_groupByDrive = nullptr;
     QTableWidget* m_table = nullptr;
     QLabel* m_summary = nullptr;
+    QLabel* m_scanTimerLabel = nullptr; // 扫描中实时计时（已用时 X 秒）
     QProgressBar* m_progress = nullptr;
     QPushButton* m_scanBtn = nullptr;
     QPushButton* m_deleteBtn = nullptr;
