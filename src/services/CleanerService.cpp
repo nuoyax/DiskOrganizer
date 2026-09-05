@@ -98,6 +98,8 @@ qint64 dirOrFileSize(const QString& path) {
 
 } // namespace
 
+CleanerService::CleanerService(QObject* parent) : QObject(parent) {}
+
 QList<CleanItem> CleanerService::findCleanableItems(const QList<CleanCategory>& categories) const {
     QList<CleanItem> items;
     for (CleanCategory cat : categories) {
