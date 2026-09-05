@@ -60,7 +60,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 
     // 扩展名可搜索下拉：覆盖常见所有类型 + 可输入子串过滤
     m_extCombo = new SearchableComboBox;
-    m_extCombo->setFixedWidth(200);
+    m_extCombo->setFixedWidth(260);
     m_extCombo->addItem(tr("全部类型"), QString());
     const struct { const char* name; const char* exts; } extGroups[] = {
         {"压缩包",  ".zip .7z .rar .tar .gz .bz2 .xz .iso .cab .tgz"},
@@ -92,7 +92,15 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     };
     for (int gi = 0; gi < 12; ++gi) {
         QIcon ic = Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x5A, 0x64, 0x78), 18);
-        m_extCombo->addItem(ic, QString::fromUtf8(extGroups[gi].name), QString::fromUtf8(extGroups[gi].exts));
+        // 显示名带后缀示例：文档 (pdf, doc, txt…)；过滤 data 不变
+        const QString extsStr = QString::fromUtf8(extGroups[gi].exts);
+        QStringList sample;
+        const QStringList all = extsStr.split(' ', Qt::SkipEmptyParts);
+        for (int e = 0; e < qMin(3, all.size()); ++e)
+            sample.append(all[e].mid(1));   // 去掉点
+        const QString label = QString::fromUtf8(extGroups[gi].name)
+            + QStringLiteral(" (%1…)").arg(sample.join(", "));
+        m_extCombo->addItem(ic, label, extsStr);
     }
 
     m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"));
