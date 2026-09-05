@@ -83,9 +83,11 @@ void ScannerService::startScan(const QStringList& rootPaths) {
 
 QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     const std::function<bool(qint64, const QString&)>& onProgress,
-    qint64 minFileSizeBytes, qint64 minDirTotalBytes) {
+    qint64 minFileSizeBytes, qint64 minDirTotalBytes,
+    std::function<bool()> cancelledFn) {
     // 快速路径：整卷扫描 + NTFS + 有权限 → 直接枚举 USN/MFT（秒级），
     // 失败则回退到并行目录树遍历。
+    // cancelled：上层取消令牌（取消后不再回退遍历，直接返回空）。
     if (rootPaths.size() == 1) {
         const QString root = rootPaths.first();
         if ((root.length() == 2 || root.length() == 3) && root[1] == QLatin1Char(':')) {
@@ -112,10 +114,12 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         && !onProgress(count, r.path))
                         return false;
                     return true;
-                }, quint64(minFileSizeBytes));
+                }, quint64(minFileSizeBytes), cancelledFn);
                 if (ok && !out.isEmpty()) return out;
                 // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
+                if (cancelledFn && cancelledFn()) return {};
                 ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
+                    if (cancelledFn && cancelledFn()) return false;
                     FileInfo info;
                     info.absolutePath = r.path;
                     info.name = r.path.section(QLatin1Char('/'), -1);
@@ -132,7 +136,8 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                     return true;
                 });
                 if (ok && !out.isEmpty()) return out;
-                // 失败（权限/日志缺失）→ 回退遍历
+                // 失败（权限/日志缺失/取消）→ 回退遍历；已取消则直接返回
+                if (cancelledFn && cancelledFn()) return {};
             }
         }
     }
@@ -141,21 +146,33 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     // 磁盘根目录的一级子目录往往分布在不同目录树分支，并行度好。
     // 大文件扫描加速：先快速聚合每个一级子目录的总大小，
     // 低于 minDirTotalBytes 的整个目录（含零碎小文件）直接剪掉，不再遍历。
+    // 预聚合本身可能很慢（串行遍历零碎目录树），放并行池里做 + 响应取消。
     QStringList shards;
     for (const QString& root : rootPaths) {
         if (!QFileInfo::exists(root)) continue;
         const QStringList subDirs = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
         if (subDirs.isEmpty()) {
             shards << root;
-        } else {
-            const bool prune = minDirTotalBytes > 0;
-            for (const QString& sub : subDirs) {
-                const QString fullPath = root + QLatin1Char('/') + sub;
-                if (prune && dirTotalSize(fullPath) < minDirTotalBytes)
+        } else if (minDirTotalBytes > 0 && subDirs.size() > 0) {
+            // 并行预聚合每个一级子目录总大小（可取消）
+            QAtomicInteger<bool> pruneCancelled{false};
+            const auto sizes = QtConcurrent::blockingMapped(subDirs,
+                [&pruneCancelled, &cancelledFn, &root](const QString& sub) -> qint64 {
+                    if (pruneCancelled.loadRelaxed()) return -1;
+                    if (cancelledFn && cancelledFn()) { pruneCancelled.storeRelaxed(true); return -1; }
+                    return dirTotalSize(root + QLatin1Char('/') + sub);
+                });
+            if (cancelledFn && cancelledFn()) return {};
+            for (int i = 0; i < subDirs.size(); ++i) {
+                if (sizes[i] >= 0 && sizes[i] < minDirTotalBytes)
                     continue; // 小目录整体跳过
-                shards << fullPath;
+                shards << root + QLatin1Char('/') + subDirs[i];
             }
             shards << root;   // 根层散文件
+        } else {
+            for (const QString& sub : subDirs)
+                shards << root + QLatin1Char('/') + sub;
+            shards << root;
         }
     }
 

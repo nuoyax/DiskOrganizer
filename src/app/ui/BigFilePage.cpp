@@ -223,10 +223,10 @@ void BigFilePage::doScan() {
             for (const auto& d : enumerateDisks()) {
                 if (cancelled()) break;
                 if (d.driveLetter.startsWith("A:") || d.driveLetter.startsWith("B:")) continue;
-                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress, minFile, minDir);
+                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress, minFile, minDir, cancelled);
             }
         } else {
-            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress, minFile, minDir);
+            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress, minFile, minDir, cancelled);
         }
         if (cancelled()) return QList<FileInfo>();
         BigFileFinder finder;

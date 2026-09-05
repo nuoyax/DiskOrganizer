@@ -18,7 +18,8 @@ public:
     // minDirTotalBytes > 0：目录总大小低于阈值的整个目录跳过（含零碎小文件）
     QList<FileInfo> scanBlocking(const QStringList& rootPaths,
         const std::function<bool(qint64, const QString&)>& onProgress = {},
-        qint64 minFileSizeBytes = 0, qint64 minDirTotalBytes = 0);
+        qint64 minFileSizeBytes = 0, qint64 minDirTotalBytes = 0,
+        std::function<bool()> cancelledFn = {});
 
 signals:
     void progress(int percent, const QString& currentPath);

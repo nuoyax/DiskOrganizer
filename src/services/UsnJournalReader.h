@@ -41,7 +41,8 @@ public:
     // （不建节点、不拼路径），大文件扫描可大幅提速并降低内存占用；
     // 目录始终保留（路径回溯需要）。失败返回 false（调用方可回退）。
     bool enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord,
-                              quint64 minFileSize = 0);
+                              quint64 minFileSize = 0,
+                              const std::function<bool()>& isCancelled = {});
 
     static bool isNtfs(wchar_t driveLetter);
 

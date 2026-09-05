@@ -269,7 +269,8 @@ bool applyFixup(BYTE* rec, DWORD recSize) {
 } // namespace
 
 bool UsnJournalReader::enumerateAllWithMeta(
-    const std::function<bool(const Record&)>& onRecord, quint64 minFileSize) {
+    const std::function<bool(const Record&)>& onRecord, quint64 minFileSize,
+    const std::function<bool()>& isCancelled) {
     if (m_volume == INVALID_HANDLE_VALUE || !onRecord) return false;
 
     MftLayout layout;
@@ -385,8 +386,9 @@ bool UsnJournalReader::enumerateAllWithMeta(
     quint64 nextBase = 0;
     int nextToParse = 0; // 待合并的块序
 
-    // 预取 + 提交解析，直到读失败/读完
+    // 预取 + 提交解析，直到读失败/读完/取消
     while (nextBase < totalRecords) {
+        if (isCancelled && isCancelled()) return false;
         // 限制在途块数，避免内存无限增长
         if (int(inflight.size()) - nextToParse >= kMaxInflight) {
             inflight[nextToParse].wait();
@@ -408,7 +410,9 @@ bool UsnJournalReader::enumerateAllWithMeta(
     QByteArray arena;
     arena.reserve(1 << 22);
     (void)nextToParse;
+    // 合并阶段也响应取消：丢弃剩余块，直接中止
     for (int c = 0; c < int(inflight.size()); ++c) {
+        if (isCancelled && isCancelled()) return false;
         Parsed p = inflight[c].get();
         const quint32 arenaBase = quint32(arena.size());
         if (arenaBase)
@@ -453,6 +457,8 @@ bool UsnJournalReader::enumerateAllWithMeta(
     };
 
     for (quint32 idx = 0; idx < nodes.size(); ++idx) {
+        // 每 8192 条响应一次取消（回溯循环本身无法被打断，靠这里及时退出）
+        if ((idx & 8191) == 0 && isCancelled && isCancelled()) return false;
         const Node& nd = nodes[idx];
         if (nd.isDir) { pathOf(nd.frn); continue; } // 目录只注册路径
         Record r;
