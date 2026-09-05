@@ -206,7 +206,7 @@ void MainWindow::refreshDisks() {
         auto* usageItem = new QTableWidgetItem(
             QString::fromUtf8("\xE2\x97\x8F ") + QString::number(ratio * 100, 'f', 1) + '%');
         usageItem->setForeground(dotColor);
-        m_diskTable->setItem(5, usageItem);
+        m_diskTable->setItem(i, 5, usageItem);
     }
 
     // 图表：各磁盘 已用/可用
