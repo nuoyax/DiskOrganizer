@@ -83,15 +83,8 @@ QLineEdit, QComboBox {
     padding: 8px 12px; selection-background-color: #2F6FED;
 }
 QLineEdit:focus, QComboBox:focus { border-color: #2F6FED; }
-QComboBox::drop-down { border: none; width: 26px; }
-QComboBox::down-arrow {
-    image: none; width: 0; height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #8A93A8;
-    margin-right: 8px;
-}
-QComboBox::down-arrow:hover, QComboBox:on { border-top-color: #2F6FED; }
+QComboBox::drop-down { border: none; width: 0; }   /* 箭头由代码绘制（TrailingAction） */
+QComboBox::down-arrow { width: 0; height: 0; }
 QComboBox QAbstractItemView {
     background: #FFFFFF; border: 1px solid #ECF0F7; border-radius: 8px;
     selection-background-color: #EAF0FE; selection-color: #2F6FED;
