@@ -42,6 +42,7 @@ private:
 
     QList<FileInfo> m_files;
     std::atomic<bool> m_scanCancelled{false};   // 取消令牌
+    std::atomic<qint64> m_lastScanElapsedMs{0}; // 上次扫描耗时（后台线程写、UI 读）
     bool m_scanning = false;
 };
 

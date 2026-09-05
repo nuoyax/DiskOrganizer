@@ -10,6 +10,7 @@
 #include "Charts.h"
 
 #include <QCheckBox>
+#include <QDateTime>
 #include <functional>
 #include <QComboBox>
 #include <QFileInfo>
@@ -194,12 +195,14 @@ void BigFilePage::doScan() {
 
     // 取消令牌：扫描中再点按钮即置位
     m_scanCancelled.store(false);
+    m_lastScanElapsedMs.store(0);
     auto cancelled = [this]() { return m_scanCancelled.load(); };
 
     // 进度由后台线程经QueuedConnection回UI：文件数 + 当前路径
     m_progress->setRange(0, 0);
 
     QtConcurrent::run([this, targetDrive, filter, cancelled]() {
+        const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
         ScannerService scanner;
         // 进度回调：更新忙碌条 + 汇总文本（跨线程→Queued）
         std::function<bool(qint64, const QString&)> onProgress =
@@ -233,7 +236,10 @@ void BigFilePage::doScan() {
         BigFileFinder finder;
         auto result = finder.find(all, filter);
         LOG << "scan finished, raw=" << all.size() << " filtered=" << result.size()
-              << " cancelled=" << cancelled();
+              << " cancelled=" << cancelled()
+              << " elapsedMs=" << (QDateTime::currentMSecsSinceEpoch() - startMs);
+        // 经由 this 传递扫描耗时到 then 回调（原子写，跨线程安全）
+        m_lastScanElapsedMs.store(QDateTime::currentMSecsSinceEpoch() - startMs);
         return result;
     }).then(this, [this](QList<FileInfo> result) {
         m_scanning = false;
@@ -253,8 +259,13 @@ void BigFilePage::doScan() {
         m_deleteBtn->setEnabled(!m_files.isEmpty());
         qint64 total = 0;
         for (const auto& f : m_files) total += f.size;
-        m_summary->setText(tr("共 %1 个文件，合计 %2")
-                               .arg(m_files.size()).arg(formatSize(total)));
+        // 扫描时长人性化展示（秒/毫秒）
+        const qint64 elapsedMs = m_lastScanElapsedMs.load();
+        const QString elapsed = elapsedMs >= 1000
+            ? tr("%1 秒").arg(QString::number(elapsedMs / 1000.0, 'f', 1))
+            : tr("%1 毫秒").arg(elapsedMs);
+        m_summary->setText(tr("共 %1 个文件，合计 %2，耗时 %3")
+                               .arg(m_files.size()).arg(formatSize(total)).arg(elapsed));
     });
 }
 
