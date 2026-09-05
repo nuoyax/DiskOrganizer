@@ -54,6 +54,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     for (const auto& d : drives)
         m_driveCombo->addItem(QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
             ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
+    m_driveCombo->setFixedWidth(260);
     // 大小阈值：预设下拉（可搜索复用），单位 MB；含自定义数值
     m_sizeCombo = new SearchableComboBox;
     m_sizeCombo->setFixedWidth(150);

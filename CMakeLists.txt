@@ -26,8 +26,8 @@ if(WIN32)
     )
     if(MSVC)
         add_compile_options(/MP /W3 /permissive-)
-        # 本机 Qt 静态库以 /MD(runtime MD_DynamicRelease, _MSC_VER=1900) 构建，必须匹配
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+        # 全静态：Qt 6.5.3 /MT 静态库(D:/qt-static-653-mt)，运行时静态链接
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 endif()
 
