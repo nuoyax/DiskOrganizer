@@ -179,9 +179,11 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_table->setAlternatingRowColors(true);
     m_table->verticalHeader()->setVisible(false);
     // 表头全选复选框
+    // 表头全选复选框（初始隐藏，有结果才显示——否则悬浮成"空行"）
     m_headerCheck = new QCheckBox(m_table);
     m_headerCheck->setStyleSheet("QCheckBox::indicator{width:16px;height:16px}");
     m_headerCheck->setToolTip(tr("全选/全不选（仅当前页）"));
+    m_headerCheck->hide();
     connect(m_headerCheck, &QCheckBox::toggled, this, [this](bool on) {
         m_table->setSortingEnabled(false);
         for (int r = 0; r < m_table->rowCount(); ++r) {
@@ -447,15 +449,22 @@ void BigFilePage::renderPage() {
         for (const auto& f : pageFiles) makeRow(f);
     }
     m_table->setSortingEnabled(true);
+    // 表头全选框定位：悬浮在第 0 列表头上（排序禁用期间表头视口稳定）
     m_headerCheck->setVisible(total > 0);
-    m_headerCheck->setChecked(m_table->rowCount() > 0 && !m_checkedPaths.isEmpty()
-        && [this]() {
-            // 当前页全部已勾选才亮起（三态由 itemChanged 维护）
-            int checked = 0;
-            for (int r = 0; r < m_table->rowCount(); ++r)
-                if (m_table->item(r, kColCheck)->checkState() == Qt::Checked) ++checked;
-            return checked == m_table->rowCount() ? true : (checked > 0, false);
-        }());
+    if (total > 0) {
+        const int x = m_table->verticalHeader()->isVisible()
+            ? m_table->verticalHeader()->width() : 0;
+        const int colW = m_table->columnWidth(kColCheck);
+        m_headerCheck->setGeometry(x + (colW - 16) / 2 + 1, 4, 16, 16);
+    }
+    m_headerCheck->setChecked([this]() {
+        if (m_table->rowCount() == 0) return false;
+        // 当前页全部已勾选才亮起（三态由 itemChanged 维护）
+        int checked = 0;
+        for (int r = 0; r < m_table->rowCount(); ++r)
+            if (m_table->item(r, kColCheck)->checkState() == Qt::Checked) ++checked;
+        return checked == m_table->rowCount();
+    }());
     // 分页栏状态
     const int tp = qMax(1, totalPages());
     m_pageLabel->setText(tr("第 %1 / %2 页，共 %3 条").arg(m_currentPage + 1).arg(tp).arg(total));

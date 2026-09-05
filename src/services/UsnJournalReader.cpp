@@ -314,6 +314,88 @@ bool UsnJournalReader::enumerateAllWithMeta(
         && vd.MftValidDataLength.QuadPart > 0)
         totalRecords = vd.MftValidDataLength.QuadPart / recSize;
 
+    // $MFT 常被碎片化：线性直读在碎片处会读到无关卷数据（表现为海量
+    // badMagic、漏文件）。$MFT 文件在部分系统上即使有备份特权也被拒打开
+    // （err=5），改用经典方案：$MFT 自身的文件记录（record 0）永远位于
+    // MFT 起始处（第一片内，线性可读），从它的 $DATA 属性解析运行列表
+    // （runlist）即可得到完整碎片分布 LCN 映射。
+    struct MftExtent { quint64 vcnOff; quint64 lcn; quint64 clusters; };
+    std::vector<MftExtent> extents;
+    {
+        // 读 MFT 起始 1MB（数千条记录，必含 record 0）
+        const DWORD headBytes = 1 << 20;
+        std::vector<BYTE> head(headBytes, 0);
+        OVERLAPPED ov = {};
+        ov.Offset = DWORD(layout.mftStartOffset & 0xFFFFFFFF);
+        ov.OffsetHigh = DWORD(layout.mftStartOffset >> 32);
+        DWORD got = 0;
+        if (ReadFile(m_volume, head.data(), headBytes, &got, &ov)
+            || (GetLastError() == ERROR_IO_PENDING
+                && GetOverlappedResult(m_volume, &ov, &got, TRUE))) {
+            auto* rec0 = head.data();
+            auto* h0 = reinterpret_cast<MftRecordHeader*>(rec0);
+            if (h0->magic == 0x454C4946 && applyFixup(rec0, DWORD(recSize))) {
+                // 遍历属性找 $DATA (0x80)，非驻留 → 解析 runlist
+                DWORD off = h0->attributeOffset;
+                while (off + sizeof(AttributeHeader) <= got) {
+                    auto* attr = reinterpret_cast<AttributeHeader*>(rec0 + off);
+                    if (attr->type == 0xFFFFFFFF || attr->length < sizeof(AttributeHeader)) break;
+                    if (attr->type == 0x80 && attr->nonResident
+                        && off + attr->length <= got) {
+                        // 非驻留属性头 0x40 字节后是 runlist
+                        // （头里 runlistOffset 在 0x20 处，WORD；无映射对时用之）
+                        const WORD runlistOff = *reinterpret_cast<WORD*>(rec0 + off + 0x20);
+                        const BYTE* run = rec0 + off + runlistOff;
+                        const BYTE* runEnd = rec0 + off + attr->length;
+                        quint64 vcn = 0, lcn = 0;
+                        while (run + 1 <= runEnd && *run != 0) {
+                            const BYTE szLen = *run & 0x0F;
+                            const BYTE offLen = *run >> 4;
+                            ++run;
+                            if (szLen == 0 || szLen > 8 || offLen > 8
+                                || run + szLen > runEnd) break;
+                            quint64 clusters = 0;
+                            for (BYTE i = 0; i < szLen; ++i)
+                                clusters |= quint64(run[i]) << (8 * i);
+                            run += szLen;
+                            // 有符号扩展的偏移量
+                            qint64 delta = 0;
+                            if (offLen > 0) {
+                                if (run + offLen > runEnd) break;
+                                for (BYTE i = 0; i < offLen; ++i)
+                                    delta |= qint64(run[i]) << (8 * i);
+                                const BYTE signBits = 8 - offLen;
+                                if (signBits < 8 && (delta >> (8 * offLen - 1)))
+                                    delta |= qint64(-1) << (8 * offLen); // 符号扩展
+                                run += offLen;
+                            }
+                            lcn += delta;
+                            if (clusters > 0)
+                                extents.push_back({ vcn, quint64(lcn), clusters });
+                            vcn += clusters;
+                        }
+                        break; // $DATA 已处理
+                    }
+                    off += attr->length;
+                }
+                LOG << "MFT runlist extents=" << extents.size();
+            } else {
+                LOG << "MFT record0 invalid (magic/fixup)";
+            }
+        } else {
+            LOG << "MFT head read FAILED err=" << GetLastError();
+        }
+    }
+    if (!extents.empty()) {
+        // 碎片分布已知：总记录数以实际数据范围为准（不超过有效数据长度）
+        quint64 totalBytes = 0;
+        for (const auto& e : extents) totalBytes += e.clusters * layout.bytesPerCluster;
+        const DWORDLONG byExtents = totalBytes / recSize;
+        totalRecords = qMin(totalRecords, byExtents);
+        LOG << "MFT extents=" << extents.size()
+              << " totalRecords=" << (quint64)totalRecords;
+    }
+
     struct Node {
         quint64 parent = 0;   // 父 FRN（低 6 字节）
         quint64 frn = 0;
@@ -326,6 +408,8 @@ bool UsnJournalReader::enumerateAllWithMeta(
     struct Parsed {
         std::vector<Node> nodes;
         QByteArray arena;     // 本块的 UTF-16 名字
+        quint64 smallSkipped = 0; // 本块被阈值剪枝的文件数（诊断用）
+        quint64 badMagic = 0, fixupFail = 0, unused = 0, noName = 0;
     };
 
     const DWORD kChunkRecords = 4096; // 4MB/块（1KB 记录）
@@ -336,12 +420,14 @@ bool UsnJournalReader::enumerateAllWithMeta(
         Parsed p;
         p.nodes.reserve(records / 2);
         p.arena.reserve(1 << 18);
+        quint64 smallSkipped = 0;
+        quint64 badMagic = 0, fixupFail = 0, unused = 0, noName = 0;
         for (DWORD i = 0; i < records; ++i) {
             BYTE* rec = const_cast<BYTE*>(buf.data()) + size_t(i) * size_t(recSize);
             auto* h = reinterpret_cast<MftRecordHeader*>(rec);
-            if (h->magic != 0x454C4946) continue;
-            if (!applyFixup(rec, DWORD(recSize))) continue;
-            if (!(h->flags & 0x01)) continue; // 未使用记录跳过
+            if (h->magic != 0x454C4946) { ++badMagic; continue; }
+            if (!applyFixup(rec, DWORD(recSize))) { ++fixupFail; continue; }
+            if (!(h->flags & 0x01)) { ++unused; continue; } // 未使用记录跳过
 
             Node n;
             n.frn = frnBase + i;
@@ -363,6 +449,7 @@ bool UsnJournalReader::enumerateAllWithMeta(
                         // （目录除外——父链回溯需要全部目录）
                         if (!n.isDir && minFileSize > 0
                             && fn->realSize < minFileSize) {
+                            ++smallSkipped;
                             skipRecord = true;
                             break;
                         }
@@ -384,24 +471,84 @@ bool UsnJournalReader::enumerateAllWithMeta(
                 off += attr->length;
             }
             if (skipRecord) continue;
-            if (n.nameLen == 0) continue;
+            if (n.nameLen == 0) { ++noName; continue; }
             p.nodes.push_back(n);
         }
+        p.smallSkipped = smallSkipped;
+        p.badMagic = badMagic; p.fixupFail = fixupFail;
+        p.unused = unused; p.noName = noName;
         return p;
     };
 
-    // 定点读一块 MFT（记录不跨块边界，块大小为记录整数倍）
-    auto readChunk = [&](std::vector<BYTE>& buf, quint64 base) -> DWORD {
-        const DWORDLONG records = qMin<DWORDLONG>(kChunkRecords, totalRecords - base);
+    // 读取器：碎片已知时按 extent LCN 直读，且单次读取不越过碎片边界
+    // （跨边界的线性读会再次读到无关数据）；否则线性读。
+    // 返回实际读到的记录数；0 = 读完/失败（err 置原因）。
+    auto readChunk = [&](std::vector<BYTE>& buf, quint64 base, DWORD& err) -> DWORD {
+        err = 0;
+        const DWORDLONG want = qMin<DWORDLONG>(kChunkRecords, totalRecords - base);
+        // extent 感知：want 条记录可能跨多片，逐片拷贝
+        if (!extents.empty()) {
+            DWORD done = 0;
+            quint64 rec = base;
+            while (done < want) {
+                const quint64 vcn = rec * recSize / layout.bytesPerCluster;
+                const MftExtent* cur = nullptr;
+                for (const auto& e : extents)
+                    if (vcn >= e.vcnOff && vcn < e.vcnOff + e.clusters) { cur = &e; break; }
+                if (!cur) break; // 超出已知碎片 = 读完
+                // 本片内还剩多少条记录（按字节粒度对齐 extent 末端）
+                const quint64 vcnEnd = cur->vcnOff + cur->clusters;
+                const DWORDLONG extentEndRec = vcnEnd * layout.bytesPerCluster / recSize;
+                const DWORDLONG piece = qMin<DWORDLONG>(want - done, extentEndRec - rec);
+                if (piece <= 0) break;
+                const DWORDLONG fileOff =
+                    (cur->lcn + (vcn - cur->vcnOff)) * layout.bytesPerCluster
+                    + (rec * recSize) % layout.bytesPerCluster;
+                OVERLAPPED ov = {};
+                ov.Offset = DWORD(fileOff & 0xFFFFFFFF);
+                ov.OffsetHigh = DWORD(fileOff >> 32);
+                DWORD got = 0;
+                if (!ReadFile(m_volume, buf.data() + size_t(done) * size_t(recSize),
+                              DWORD(piece * recSize), &got, &ov)) {
+                    err = GetLastError();
+                    if (err == ERROR_IO_PENDING
+                        && GetOverlappedResult(m_volume, &ov, &got, TRUE))
+                        err = 0;
+                    if (err != 0) {
+                        LOG << "MFT readChunk FAILED base=" << base
+                              << " rec=" << rec << " err=" << err;
+                        return 0;
+                    }
+                }
+                done += DWORD(got / recSize);
+                rec += got / recSize;
+                if (got % recSize != 0) break; // 尾部不足一条 = 到末尾
+            }
+            if (done == 0) { err = DWORD(-1); return 0; }
+            return done;
+        }
+        // 线性缺省（无碎片表）
         OVERLAPPED ov = {};
         const DWORDLONG fileOff = layout.mftStartOffset + base * recSize;
         ov.Offset = DWORD(fileOff & 0xFFFFFFFF);
         ov.OffsetHigh = DWORD(fileOff >> 32);
         DWORD got = 0;
-        if (!ReadFile(m_volume, buf.data(), DWORD(records * recSize), &got, &ov)
-            && GetLastError() == ERROR_IO_PENDING
-            && !GetOverlappedResult(m_volume, &ov, &got, TRUE))
-            return 0; // 读失败 → 视为到达末尾
+        if (!ReadFile(m_volume, buf.data(), DWORD(want * recSize), &got, &ov)) {
+            err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                if (!GetOverlappedResult(m_volume, &ov, &got, TRUE))
+                    err = GetLastError();
+                else
+                    err = 0; // 异步读完成
+            }
+            if (err != 0) {
+                LOG << "MFT readChunk FAILED base=" << base
+                      << " off=" << (quint64)fileOff
+                      << " want=" << (quint64)(want * recSize) << " err=" << err;
+                return 0;
+            }
+        }
+        if (got == 0) { err = DWORD(-1); return 0; } // 0 字节 = 异常（应读到 EOF 前的数据）
         return got / DWORD(recSize);
     };
 
@@ -413,6 +560,7 @@ bool UsnJournalReader::enumerateAllWithMeta(
     int nextToParse = 0; // 待合并的块序
 
     // 预取 + 提交解析，直到读失败/读完/取消
+    quint64 lastGoodBase = 0; // 最后一块成功读到的位置（读失败时用于诊断）
     while (nextBase < totalRecords) {
         if (isCancelled && isCancelled()) return false;
         // 限制在途块数，避免内存无限增长
@@ -421,25 +569,38 @@ bool UsnJournalReader::enumerateAllWithMeta(
             ++nextToParse;
         }
         auto buf = std::make_unique<std::vector<BYTE>>(size_t(recSize * kChunkRecords));
-        const DWORD records = readChunk(*buf, nextBase);
-        if (records == 0) break;
+        DWORD readErr = 0;
+        const DWORD records = readChunk(*buf, nextBase, readErr);
+        if (records == 0) {
+            LOG << "MFT read stopped at base=" << nextBase
+                  << " of " << (quint64)totalRecords << " records err=" << readErr;
+            break;
+        }
+        lastGoodBase = nextBase + records;
         auto* raw = buf.release();
         bufs.emplace_back(raw);
         inflight.push_back(std::async(std::launch::async, parseChunk,
                                       std::cref(*raw), nextBase, records));
         nextBase += records;
     }
+    LOG << "MFT read complete: records=" << lastGoodBase
+          << " of " << (quint64)totalRecords;
 
     // 按序合并：FRN→下标索引 + 名字 arena 偏移平移
     QHash<quint64, quint32> indexOf; // FRN -> nodes 下标
     indexOf.reserve(1 << 18);
     QByteArray arena;
     arena.reserve(1 << 22);
+    quint64 totalSmallSkipped = 0, totalBadMagic = 0, totalFixupFail = 0;
+    quint64 totalUnused = 0, totalNoName = 0;
     (void)nextToParse;
     // 合并阶段也响应取消：丢弃剩余块，直接中止
     for (int c = 0; c < int(inflight.size()); ++c) {
         if (isCancelled && isCancelled()) return false;
         Parsed p = inflight[c].get();
+        totalSmallSkipped += p.smallSkipped;
+        totalBadMagic += p.badMagic; totalFixupFail += p.fixupFail;
+        totalUnused += p.unused; totalNoName += p.noName;
         const quint32 arenaBase = quint32(arena.size());
         if (arenaBase)
             for (auto& n : p.nodes) n.nameOff += arenaBase;
@@ -463,7 +624,13 @@ bool UsnJournalReader::enumerateAllWithMeta(
         while (prefix.endsWith(QLatin1Char('/'))) prefix.chop(1);
         // "C:" → "C:"（根自身）；前缀匹配按段进行（在输出循环里逐段比较）
     }
-    LOG << "MFT parsed nodes=" << nodes.size() << " cancelled=" << (isCancelled && isCancelled());
+    LOG << "MFT parsed nodes=" << nodes.size()
+          << " smallSkipped=" << totalSmallSkipped
+          << " badMagic=" << totalBadMagic
+          << " fixupFail=" << totalFixupFail
+          << " unused=" << totalUnused
+          << " noName=" << totalNoName
+          << " cancelled=" << (isCancelled && isCancelled());
 
     // 路径拼装：只为候选文件触发，沿父链向上找已缓存祖先，再逐级下拼。
     // 目录节点不再全量预拼（百万级目录的 QString 拼接是此前的最大热点）。
