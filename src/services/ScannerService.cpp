@@ -110,8 +110,9 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 // 失败再退到纯 USN 枚举，最后才回退目录遍历。
                 bool ok = usn.enumerateAllWithMeta([&](const DiskOrganizer::UsnJournalReader::Record& r) {
                     FileInfo info;
-                    info.absolutePath = r.path;
-                    info.name = r.path.section(QLatin1Char('/'), -1);
+                    // 归一为 Windows 原生分隔符，展示/删除一致（C:/dir/file -> C:\dir\file）
+                    info.absolutePath = QDir::fromNativeSeparators(r.path);
+                    info.name = info.absolutePath.section(QLatin1Char('/'), -1);
                     info.isDir = r.isDirectory;
                     info.isSymlink = false;
                     info.size = r.size;
@@ -131,8 +132,8 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
                     if (cancelledFn && cancelledFn()) return false;
                     FileInfo info;
-                    info.absolutePath = r.path;
-                    info.name = r.path.section(QLatin1Char('/'), -1);
+                    info.absolutePath = QDir::fromNativeSeparators(r.path);
+                    info.name = info.absolutePath.section(QLatin1Char('/'), -1);
                     info.isDir = r.isDirectory;
                     info.isSymlink = false;
                     info.size = r.size;

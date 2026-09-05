@@ -29,12 +29,14 @@ private slots:
 
 private:
     void populateResults();
+    void updateDeleteButtonState();
 
     SearchableComboBox* m_driveCombo = nullptr;
     QLineEdit* m_dirEdit = nullptr;     // 目录级扫描（空=整盘）
     SearchableComboBox* m_sizeCombo = nullptr;
     SearchableComboBox* m_extCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;
+    QCheckBox* m_headerCheck = nullptr; // 表头全选复选框
     QTableWidget* m_table = nullptr;
     QLabel* m_summary = nullptr;
     QLabel* m_scanTimerLabel = nullptr; // 扫描中实时计时（已用时 X 秒）

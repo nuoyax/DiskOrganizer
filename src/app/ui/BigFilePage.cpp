@@ -10,6 +10,7 @@
 #include "Charts.h"
 
 #include <QCheckBox>
+#include <QSignalBlocker>
 #include <QDateTime>
 #include <QDir>
 #include <QTimer>
@@ -32,13 +33,12 @@
 namespace DiskOrganizer {
 
 namespace {
-constexpr int kRolePath = Qt::UserRole;        // 完整路径
-constexpr int kRoleSize = Qt::UserRole + 1;    // 字节数（用于删除）
-constexpr int kColDrive = 0;
-constexpr int kColSize  = 1;
-constexpr int kColName  = 2;
-constexpr int kColPath  = 3;
-constexpr int kColMtime = 4;
+constexpr int kColCheck = 0;
+constexpr int kColDrive = 1;
+constexpr int kColSize  = 2;
+constexpr int kColName  = 3;
+constexpr int kColPath  = 4;
+constexpr int kColMtime = 5;
 }
 
 BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
@@ -162,9 +162,9 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     progressRow->addWidget(m_scanTimerLabel);
     root->addLayout(progressRow);
 
-    // 结果表（可自由排序）
-    m_table = new QTableWidget(0, 5);
-    m_table->setHorizontalHeaderLabels({tr("磁盘"), tr("大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
+    // 结果表（可自由排序 + 复选框多选）
+    m_table = new QTableWidget(0, 6);
+    m_table->setHorizontalHeaderLabels({tr(""), tr("磁盘"), tr("文件大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
     m_table->horizontalHeader()->setSectionResizeMode(kColPath, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSortIndicator(kColSize, Qt::DescendingOrder);
     m_table->setSortingEnabled(true);
@@ -173,10 +173,44 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setAlternatingRowColors(true);
     m_table->verticalHeader()->setVisible(false);
+    // 表头全选复选框
+    m_headerCheck = new QCheckBox(m_table);
+    m_headerCheck->setStyleSheet("QCheckBox::indicator{width:16px;height:16px}");
+    m_headerCheck->setToolTip(tr("全选/全不选"));
+    connect(m_headerCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_table->setSortingEnabled(false);
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            if (auto* it = m_table->item(r, kColCheck)) it->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+        }
+        m_table->setSortingEnabled(true);
+        updateDeleteButtonState();
+    });
     root->addWidget(m_table, 1);
 
     connect(m_scanBtn, &QPushButton::clicked, this, &BigFilePage::doScan);
     connect(m_deleteBtn, &QPushButton::clicked, this, &BigFilePage::doDelete);
+    // 勾选变化 → 删除按钮可用性 + 全选框三态
+    connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
+        if (it->column() != kColCheck) return;
+        QSignalBlocker blocker(m_headerCheck);
+        int checked = 0;
+        for (int r = 0; r < m_table->rowCount(); ++r)
+            if (m_table->item(r, kColCheck)->checkState() == Qt::Checked) ++checked;
+        if (checked == 0) m_headerCheck->setCheckState(Qt::Unchecked);
+        else if (checked == m_table->rowCount()) m_headerCheck->setCheckState(Qt::Checked);
+        else m_headerCheck->setCheckState(Qt::PartiallyChecked);
+        updateDeleteButtonState();
+    });
+}
+
+void BigFilePage::updateDeleteButtonState() {
+    int checked = 0;
+    for (int r = 0; r < m_table->rowCount(); ++r)
+        if (m_table->item(r, kColCheck) && m_table->item(r, kColCheck)->checkState() == Qt::Checked)
+            ++checked;
+    m_deleteBtn->setEnabled(checked > 0);
+    m_deleteBtn->setText(checked > 0
+        ? tr("删除勾选文件 (%1)").arg(checked) : tr("删除选中文件"));
 }
 
 void BigFilePage::doScan() {
@@ -314,71 +348,63 @@ void BigFilePage::doScan() {
 void BigFilePage::populateResults() {
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);
+    const auto makeRow = [this](const FileInfo& f) {
+        const int r = m_table->rowCount();
+        m_table->insertRow(r);
+        // 复选框列（行选择以复选框为准）
+        auto* itCheck = new QTableWidgetItem;
+        itCheck->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        itCheck->setCheckState(Qt::Unchecked);
+        // 磁盘列
+        auto* itDrive = new QTableWidgetItem(f.absolutePath.left(2).toUpper());
+        // 文件大小列：原始字节数作 DisplayRole 排序键，展示用 formatSize
+        auto* itSize = new QTableWidgetItem;
+        itSize->setData(Qt::DisplayRole, f.size);            // 排序按字节
+        itSize->setData(Qt::UserRole + 10, formatSize(f.size)); // 展示文本（代理读 UserRole）
+        itSize->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto* itName = new QTableWidgetItem(f.name);
+        auto* itPath = new QTableWidgetItem(QDir::toNativeSeparators(f.absolutePath));
+        auto* itTime = new QTableWidgetItem(
+            QDateTime::fromMSecsSinceEpoch(f.lastModified).toString("yyyy-MM-dd HH:mm"));
+        m_table->setItem(r, kColCheck, itCheck);
+        m_table->setItem(r, kColDrive, itDrive);
+        m_table->setItem(r, kColSize, itSize);
+        m_table->setItem(r, kColName, itName);
+        m_table->setItem(r, kColPath, itPath);
+        m_table->setItem(r, kColMtime, itTime);
+    };
     if (m_groupByDrive->isChecked()) {
-        // 按磁盘聚合：同盘文件相邻（QMultiMap 按键排序），键内保持插入序
         QMap<QString, QList<const FileInfo*>> byDrive;
         for (const auto& f : m_files)
             byDrive[f.absolutePath.left(2).toUpper()].append(&f);
-        for (auto it = byDrive.constBegin(); it != byDrive.constEnd(); ++it) {
-            const QString& driveKey = it.key();
-            for (const FileInfo* f : it.value()) {
-                const int r = m_table->rowCount();
-                m_table->insertRow(r);
-                auto* itDrive = new QTableWidgetItem(driveKey);
-                itDrive->setData(kRolePath, f->absolutePath);
-                itDrive->setData(kRoleSize, f->size);
-                auto* itSize = new QTableWidgetItem;
-                itSize->setData(Qt::DisplayRole, formatSize(f->size));
-                itSize->setData(Qt::UserRole + 10, f->size);  // 排序用
-                auto* itName = new QTableWidgetItem(f->name);
-                auto* itPath = new QTableWidgetItem(f->absolutePath);
-                auto* itTime = new QTableWidgetItem(
-                    QDateTime::fromMSecsSinceEpoch(f->lastModified)
-                        .toString("yyyy-MM-dd HH:mm"));
-                m_table->setItem(r, kColDrive, itDrive);
-                m_table->setItem(r, kColSize, itSize);
-                m_table->setItem(r, kColName, itName);
-                m_table->setItem(r, kColPath, itPath);
-                m_table->setItem(r, kColMtime, itTime);
-            }
-        }
+        for (auto it = byDrive.constBegin(); it != byDrive.constEnd(); ++it)
+            for (const FileInfo* f : it.value())
+                makeRow(*f);
     } else {
-        for (const auto& f : m_files) {
-            const int r = m_table->rowCount();
-            m_table->insertRow(r);
-            auto* itDrive = new QTableWidgetItem(f.absolutePath.left(2).toUpper());
-            itDrive->setData(kRolePath, f.absolutePath);
-            itDrive->setData(kRoleSize, f.size);
-            auto* itSize = new QTableWidgetItem;
-            itSize->setData(Qt::DisplayRole, formatSize(f.size));
-            itSize->setData(Qt::UserRole + 10, f.size);
-            m_table->setItem(r, kColDrive, itDrive);
-            m_table->setItem(r, kColSize, itSize);
-            m_table->setItem(r, kColName, new QTableWidgetItem(f.name));
-            m_table->setItem(r, kColPath, new QTableWidgetItem(f.absolutePath));
-            m_table->setItem(r, kColMtime, new QTableWidgetItem(
-                QDateTime::fromMSecsSinceEpoch(f.lastModified).toString("yyyy-MM-dd HH:mm")));
-        }
+        for (const auto& f : m_files) makeRow(f);
     }
     m_table->setSortingEnabled(true);
+    m_headerCheck->setVisible(m_table->rowCount() > 0);
+    m_headerCheck->setChecked(false);
+    updateDeleteButtonState();
 }
 
 void BigFilePage::doDelete() {
-    const auto rows = m_table->selectionModel()->selectedRows();
-    if (rows.isEmpty()) { m_summary->setText(tr("请先选中要删除的文件行")); return; }
-
+    // 以复选框勾选为准（支持跨页/排序后稳定选择）
     QList<CleanItem> items;
-    for (const auto& idx : rows) {
-        const int r = idx.row();
-        auto* itDrive = m_table->item(r, kColDrive);
+    for (int r = 0; r < m_table->rowCount(); ++r) {
+        auto* itCheck = m_table->item(r, kColCheck);
+        if (!itCheck || itCheck->checkState() != Qt::Checked) continue;
+        const QString path = QDir::fromNativeSeparators(m_table->item(r, kColPath)->text());
         CleanItem it;
         it.category = CleanCategory::CustomRules;
-        it.path = itDrive->data(kRolePath).toString();
-        it.size = itDrive->data(kRoleSize).toLongLong();
+        it.path = path;
+        it.size = m_table->item(r, kColSize)->data(Qt::DisplayRole).toLongLong();
         it.safeToDelete = true;
         it.description = tr("大文件清理");
         items.append(it);
     }
+    if (items.isEmpty()) { m_summary->setText(tr("请先勾选要删除的文件")); return; }
 
     m_scanBtn->setEnabled(false);
     m_deleteBtn->setEnabled(false);

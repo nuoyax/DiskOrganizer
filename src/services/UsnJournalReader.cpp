@@ -256,6 +256,16 @@ inline qint64 fileTimeToEpochMs(qint64 ft) {
     return ft ? (ft / 10000LL) - 11644473600000LL : 0;
 }
 
+// 路径子树判定：按 '/' 分段比较（大小写不敏感）。
+// prefix="C:/a" 匹配 "C:/a/x" 与 "C:/a" 自身，不误匹配 "C:/ab"。
+inline bool pathIsUnder(const QString& path, const QString& prefix) {
+    if (path.startsWith(prefix, Qt::CaseInsensitive)) {
+        if (path.size() == prefix.size()) return true;           // 目录自身
+        if (path.at(prefix.size()) == QLatin1Char('/')) return true; // 子级
+    }
+    return false;
+}
+
 // 校验并应用 fixup，返回记录是否有效
 bool applyFixup(BYTE* rec, DWORD recSize) {
     auto* h = reinterpret_cast<MftRecordHeader*>(rec);
@@ -451,6 +461,7 @@ bool UsnJournalReader::enumerateAllWithMeta(
     if (!prefix.isEmpty()) {
         prefix.replace(QLatin1Char('\\'), QLatin1Char('/'));
         while (prefix.endsWith(QLatin1Char('/'))) prefix.chop(1);
+        // "C:" → "C:"（根自身）；前缀匹配按段进行（在输出循环里逐段比较）
     }
     LOG << "MFT parsed nodes=" << nodes.size() << " cancelled=" << (isCancelled && isCancelled());
 
@@ -473,6 +484,10 @@ bool UsnJournalReader::enumerateAllWithMeta(
             cur = nd.parent;
         }
         QString path = base;
+        if (path.isEmpty()) {
+            // 链顶到卷根：补盘符前缀（如 "C:"），否则路径缺盘符
+            path = QString(QChar(m_drive)) + QStringLiteral(":");
+        }
         for (int i = depth - 1; i >= 0; --i) {
             const Node& nd = nodes[*indexOf.constFind(chain[i])];
             path += QLatin1Char('/');
@@ -495,9 +510,9 @@ bool UsnJournalReader::enumerateAllWithMeta(
         r.size = nd.size;
         r.lastModifiedMs = nd.mtimeMs;
         if (r.path.isEmpty()) continue;
-        // 目录级扫描：只回报指定子树内的文件（保留 '/' 前缀避免同前缀名误匹配）
+        // 目录级扫描：只回报指定子树内的文件（按 '/' 分段前缀比较，避免 "C:/a" 误匹配 "C:/ab"）
         if (!prefix.isEmpty()) {
-            if (!r.path.startsWith(prefix, Qt::CaseInsensitive)) continue;
+            if (!pathIsUnder(r.path, prefix)) continue;
         }
         if (!onRecord(r)) break;
     }
