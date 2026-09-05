@@ -1,6 +1,8 @@
 qt_standard_project_setup()
 qt_add_executable(DiskOrganizer
     main.cpp
+    app.rc
+    app.ico
     ui/MainWindow.h
     ui/MainWindow.cpp
     ui/PageBase.h
