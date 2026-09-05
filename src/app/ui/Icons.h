@@ -46,6 +46,10 @@ namespace P {
     inline const char* duplicate =
         "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1"
         " 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z";
+    // 文档
+    inline const char* file =
+        "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4"
+        " 18H6V4h7v5h5v11zM8 12h8v2H8v-2zm0 4h8v2H8v-2z";
     // 大文件（文档+放大镜）
     inline const char* bigfile =
         "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4"
@@ -85,6 +89,17 @@ namespace P {
     // 火箭（优化）
     inline const char* rocket =
         "M12 2c3 0 7 2 7 10l-3 3-1-4-3 3v6l-2 2-2-6-6-2 2-2h6l3-3-4-1 3-3s2-3 6-3z";
+    // 程序员/代码（尖括号）
+    inline const char* code =
+        "M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z";
+    // 终端（命令行）
+    inline const char* terminal =
+        "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM7.7"
+        " 14.3l-1.4-1.4L9.2 10 6.3 7.1l1.4-1.4L12 10l-4.3 4.3zM17 15h-5v-2h5v2z";
+    // 芯片（CPU）
+    inline const char* chip =
+        "M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1"
+        " 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z";
 }
 
 } // namespace Icons

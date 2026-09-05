@@ -1,5 +1,6 @@
 #include "BigFilePage.h"
 #include "Icons.h"
+#include "SearchableComboBox.h"
 #include "util/FileSystemUtil.h"
 #include "util/SizeFormatter.h"
 #include "services/ScannerService.h"
@@ -13,6 +14,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QProgressBar>
@@ -55,9 +57,44 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_minSizeEdit = new QLineEdit("100");
     m_minSizeEdit->setFixedWidth(90);
     m_minSizeEdit->setToolTip(tr("单位 MB"));
-    m_extEdit = new QLineEdit;
-    m_extEdit->setPlaceholderText(tr("扩展名过滤，如 .iso,.zip（留空=全部）"));
-    m_extEdit->setFixedWidth(240);
+
+    // 扩展名可搜索下拉：覆盖常见所有类型 + 可输入子串过滤
+    m_extCombo = new SearchableComboBox;
+    m_extCombo->setFixedWidth(200);
+    m_extCombo->addItem(tr("全部类型"), QString());
+    const struct { const char* name; const char* exts; } extGroups[] = {
+        {"压缩包",  ".zip .7z .rar .tar .gz .bz2 .xz .iso .cab .tgz"},
+        {"视频",    ".mp4 .mkv .avi .mov .wmv .flv .webm .m4v .mpg .rmvb .ts"},
+        {"音频",    ".mp3 .wav .flac .aac .ogg .wma .m4a .ape .mid"},
+        {"图片",    ".jpg .jpeg .png .gif .bmp .webp .svg .tif .tiff .raw .ico .heic"},
+        {"文档",    ".pdf .doc .docx .xls .xlsx .ppt .pptx .txt .md .csv .odt"},
+        {"程序/库", ".exe .dll .lib .so .apk .msi .bin .sys .ocx .jar"},
+        {"代码",    ".cpp .h .hpp .c .cs .py .java .js .ts .html .css .json .xml .sql .go .rs"},
+        {"开发环境",".pdb .idb .obj .o .a .exp .wim .vhd .vhdx"},
+        {"光盘镜像",".iso .img .vhd .vhdx .wim .gho .mds"},
+        {"数据库",  ".db .sqlite .mdb .mdf .ldf .bak"},
+        {"虚拟机",  ".vmdk .vdi .qcow2 .ova .ovf .vmx"},
+        {"其他",    ".dat .log .tmp .cache .dmp .etl .evtx"},
+    };
+    const char* groupIcons[] = {
+        Icons::P::duplicate,   // 压缩包
+        Icons::P::rocket,      // 视频 -> 播放含义近似
+        Icons::P::pie,         // 音频
+        Icons::P::bigfile,     // 图片
+        Icons::P::file,        // 文档
+        Icons::P::chip,        // 程序/库
+        Icons::P::code,        // 代码
+        Icons::P::terminal,    // 开发环境
+        Icons::P::disk,        // 光盘镜像
+        Icons::P::drive,       // 数据库
+        Icons::P::duplicate,   // 虚拟机
+        Icons::P::folder,      // 其他
+    };
+    for (int gi = 0; gi < 12; ++gi) {
+        QIcon ic = Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x5A, 0x64, 0x78), 18);
+        m_extCombo->addItem(ic, QString::fromUtf8(extGroups[gi].name), QString::fromUtf8(extGroups[gi].exts));
+    }
+
     m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"));
     m_groupByDrive->setChecked(true);
 
@@ -66,7 +103,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     filterRow->addWidget(new QLabel(tr("大于 (MB):")));
     filterRow->addWidget(m_minSizeEdit);
     filterRow->addWidget(new QLabel(tr("类型:")));
-    filterRow->addWidget(m_extEdit);
+    filterRow->addWidget(m_extCombo);
     filterRow->addWidget(m_groupByDrive);
     filterRow->addStretch();
 
@@ -124,8 +161,10 @@ void BigFilePage::doScan() {
     const QString targetDrive = m_driveCombo->currentData().toString();
     BigFileFilter filter;
     filter.minSizeBytes = qMax(1, m_minSizeEdit->text().toInt()) * 1024LL * 1024;
-    const QString extText = m_extEdit->text().trimmed().toLower();
-    if (!extText.isEmpty()) filter.extensionFilter = extText;
+    // 类型下拉：data 为空格分隔的扩展名集合，拆成 QStringList 精确匹配
+    const QStringList exts = m_extCombo->currentData().toString()
+                                 .split(' ', Qt::SkipEmptyParts);
+    if (!exts.isEmpty()) filter.extensionFilter = exts;
     filter.topN = 500;
 
     // 取消令牌：扫描中再点按钮即置位

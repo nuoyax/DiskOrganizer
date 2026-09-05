@@ -6,7 +6,7 @@
 struct BigFileFilter {
     qint64 minSizeBytes = 100LL * 1024 * 1024;  // 默认 >=100MB
     qint64 olderThanDays = 0;                    // 0=不过滤
-    QString extensionFilter;                     // 空=全部
+    QStringList extensionFilter;                 // 空=全部；多值任一命中（精确匹配扩展名如 ".iso"）
     int topN = 100;
 };
 

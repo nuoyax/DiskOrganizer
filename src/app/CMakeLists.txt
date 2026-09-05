@@ -5,6 +5,7 @@ qt_add_executable(DiskOrganizer
     ui/MainWindow.cpp
     ui/PageBase.h
     ui/FlatStyle.h
+    ui/SearchableComboBox.h
     ui/Icons.h
     ui/Charts.h
     ui/Charts.cpp

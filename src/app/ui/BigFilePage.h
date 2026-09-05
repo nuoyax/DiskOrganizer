@@ -15,6 +15,8 @@ class QCheckBox;
 
 namespace DiskOrganizer {
 
+class SearchableComboBox;
+
 // 大文件扫描清理页：按磁盘扫描 → 结果按磁盘分组展示，列可自由排序
 class BigFilePage : public PageBase {
     Q_OBJECT
@@ -30,7 +32,7 @@ private:
 
     QComboBox* m_driveCombo = nullptr;
     QLineEdit* m_minSizeEdit = nullptr;
-    QLineEdit* m_extEdit = nullptr;
+    SearchableComboBox* m_extCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;
     QTableWidget* m_table = nullptr;
     QLabel* m_summary = nullptr;
