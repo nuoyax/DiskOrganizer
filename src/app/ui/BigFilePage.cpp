@@ -48,7 +48,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 
     // 过滤条件行
     auto* filterRow = new QHBoxLayout;
-    m_driveCombo = new QComboBox;
+    m_driveCombo = new SearchableComboBox;
     const auto drives = enumerateDisks();
     m_driveCombo->addItem(tr("全部磁盘"), QString());
     for (const auto& d : drives)

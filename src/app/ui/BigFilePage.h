@@ -30,7 +30,7 @@ private slots:
 private:
     void populateResults();
 
-    QComboBox* m_driveCombo = nullptr;
+    SearchableComboBox* m_driveCombo = nullptr;
     SearchableComboBox* m_sizeCombo = nullptr;
     SearchableComboBox* m_extCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;
