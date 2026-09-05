@@ -1,6 +1,8 @@
 #include "Charts.h"
+#include "util/SizeFormatter.h"
 #include <QPainter>
 #include <QPainterPath>
+#include <QFontMetrics>
 #include <algorithm>
 #include <cmath>
 
@@ -104,32 +106,48 @@ void BarChart::paintEvent(QPaintEvent*) {
         return;
     }
 
-    const double labelW = 90;
-    const double barAreaRight = width() - 60;
+    p.setFont(font());
+    const QFontMetrics fm = p.fontMetrics();
+
+    // 值文本宽度（右侧预留）：取最宽值文本
+    double valueW = 0;
+    for (const auto& b : m_bars)
+        valueW = qMax(valueW, double(fm.horizontalAdvance(DiskOrganizer::formatSize(b.second))));
+    valueW += 8;
+
+    // 标签宽度：取最宽标签，超长省略，上限 40% 宽度
+    double labelW = 0;
+    for (const auto& b : m_bars)
+        labelW = qMax(labelW, double(fm.horizontalAdvance(b.first)));
+    labelW = qMin(labelW + 12, width() * 0.4);
+    labelW = qMax(labelW, 60.0);
+
+    const double barAreaRight = width() - valueW - 6;
     const double rowH = double(height() - 8) / m_bars.size();
     const double barH = qMin(rowH * 0.55, 18.0);
 
-    p.setFont(font());
     int idx = 0;
     double y = 6;
     for (const auto& bar : m_bars) {
+        // 标签超宽省略
+        QString label = bar.first;
+        if (fm.horizontalAdvance(label) > labelW - 8)
+            label = fm.elidedText(label, Qt::ElideMiddle, int(labelW - 8));
         p.setPen(QColor(0x63, 0x6E, 0x88));
         p.drawText(QRectF(0, y, labelW - 8, rowH),
-                   Qt::AlignRight | Qt::AlignVCenter, bar.first);
+                   Qt::AlignRight | Qt::AlignVCenter, label);
 
         const double w = (barAreaRight - labelW) * (bar.second / m_max);
-        QColor c = kPalette[idx % kPaletteSize];
-        // 统一色系更扁平：全部用主色，透明度区分
-        c = QColor(0x2F, 0x6F, 0xED);
+        QColor c(0x2F, 0x6F, 0xED);
         c.setAlphaF(0.35 + 0.65 * (bar.second / m_max));
         p.setPen(Qt::NoPen);
         p.setBrush(c);
         p.drawRoundedRect(QRectF(labelW, y + (rowH - barH) / 2, qMax(4.0, w), barH), 4, 4);
 
         p.setPen(QColor(0x2D, 0x34, 0x36));
-        p.drawText(QRectF(barAreaRight + 8, y, 52, rowH),
+        p.drawText(QRectF(barAreaRight + 6, y, valueW, rowH),
                    Qt::AlignLeft | Qt::AlignVCenter,
-                   QString::number(bar.second, 'f', bar.second < 10 ? 1 : 0));
+                   DiskOrganizer::formatSize(bar.second));
         y += rowH;
         ++idx;
     }
