@@ -3,6 +3,7 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QAction>
+#include <QFontMetrics>
 #include "Icons.h"
 
 namespace DiskOrganizer {
@@ -48,11 +49,22 @@ protected:
                 lv->setRowHidden(i, false);
         QComboBox::showPopup();
         lineEdit()->selectAll();
+        // 弹出列表宽度跟随内容（不截断到控件宽度，限制不超过 560）
+        if (QAbstractItemView* v = view()) {
+            int contentWidth = 0;
+            const QFontMetrics fm(font());
+            for (int i = 0; i < count(); ++i)
+                contentWidth = qMax(contentWidth,
+                    fm.horizontalAdvance(itemText(i)) + iconPad);
+            contentWidth += 2 * v->frameWidth() + 8;
+            v->setFixedWidth(qMin(qMax(contentWidth, width()), 560));
+        }
     }
 
 private:
     inline static const char* chevronPath =
         "M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z";
+    static constexpr int iconPad = 30;   // 图标 + 文字右缓冲
     QAction* m_arrowAction = nullptr;
 };
 

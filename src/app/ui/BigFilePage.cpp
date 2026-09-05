@@ -54,9 +54,18 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     for (const auto& d : drives)
         m_driveCombo->addItem(QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
             ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
-    m_minSizeEdit = new QLineEdit("100");
-    m_minSizeEdit->setFixedWidth(90);
-    m_minSizeEdit->setToolTip(tr("单位 MB"));
+    // 大小阈值：预设下拉（可搜索复用），单位 MB；含自定义数值
+    m_sizeCombo = new SearchableComboBox;
+    m_sizeCombo->setFixedWidth(150);
+    m_sizeCombo->addItem("1 MB", 1);
+    m_sizeCombo->addItem("10 MB", 10);
+    m_sizeCombo->addItem("50 MB", 50);
+    m_sizeCombo->addItem("100 MB", 100);
+    m_sizeCombo->addItem("500 MB", 500);
+    m_sizeCombo->addItem("1 GB", 1024);
+    m_sizeCombo->addItem("5 GB", 5 * 1024);
+    m_sizeCombo->addItem("10 GB", 10 * 1024);
+    m_sizeCombo->setCurrentIndex(3);   // 默认 100MB
 
     // 扩展名可搜索下拉：覆盖常见所有类型 + 可输入子串过滤
     m_extCombo = new SearchableComboBox;
@@ -108,8 +117,8 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 
     filterRow->addWidget(new QLabel(tr("磁盘:")));
     filterRow->addWidget(m_driveCombo);
-    filterRow->addWidget(new QLabel(tr("大于 (MB):")));
-    filterRow->addWidget(m_minSizeEdit);
+    filterRow->addWidget(new QLabel(tr("大小:")));
+    filterRow->addWidget(m_sizeCombo);
     filterRow->addWidget(new QLabel(tr("类型:")));
     filterRow->addWidget(m_extCombo);
     filterRow->addWidget(m_groupByDrive);
@@ -174,7 +183,7 @@ void BigFilePage::doScan() {
 
     const QString targetDrive = m_driveCombo->currentData().toString();
     BigFileFilter filter;
-    filter.minSizeBytes = qMax(1, m_minSizeEdit->text().toInt()) * 1024LL * 1024;
+    filter.minSizeBytes = qMax(1, m_sizeCombo->currentData().toInt()) * 1024LL * 1024;
     // 类型下拉：data 为空格分隔的扩展名集合，拆成 QStringList 精确匹配
     const QStringList exts = m_extCombo->currentData().toString()
                                  .split(' ', Qt::SkipEmptyParts);

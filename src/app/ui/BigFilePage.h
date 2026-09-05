@@ -31,7 +31,7 @@ private:
     void populateResults();
 
     QComboBox* m_driveCombo = nullptr;
-    QLineEdit* m_minSizeEdit = nullptr;
+    SearchableComboBox* m_sizeCombo = nullptr;
     SearchableComboBox* m_extCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;
     QTableWidget* m_table = nullptr;
