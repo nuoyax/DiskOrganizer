@@ -32,8 +32,10 @@ public:
     };
 
     // 枚举卷上全部文件记录。onRecord 返回 false 提前中止。
+    // isCancelled 可选：在 MFT 枚举阻塞读之间轮询，取消后中止返回 false。
     // 返回是否成功完整枚举（失败可能因权限/非 NTFS/中途错误）
-    bool enumerateAll(const std::function<bool(const Record&)>& onRecord);
+    bool enumerateAll(const std::function<bool(const Record&)>& onRecord,
+                      const std::function<bool()>& isCancelled = {});
 
     // 增强版：直接读取原始 $MFT 解析 $FILE_NAME 属性，
     // Record 同时带 size 与 lastModifiedMs（USN 记录本身不含这些字段）。

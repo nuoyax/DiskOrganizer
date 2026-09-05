@@ -61,7 +61,9 @@ struct UsnRecordV2Header {
 
 } // namespace
 
-bool UsnJournalReader::enumerateAll(const std::function<bool(const Record&)>& onRecord) {
+bool UsnJournalReader::enumerateAll(
+    const std::function<bool(const Record&)>& onRecord,
+    const std::function<bool()>& isCancelled) {
     if (m_volume == INVALID_HANDLE_VALUE || !onRecord) return false;
 
     // FSCTL_ENUM_USN_DATA：一次 MFT 全量枚举（Everything 同款路线），
@@ -85,6 +87,7 @@ bool UsnJournalReader::enumerateAll(const std::function<bool(const Record&)>& on
 
     DWORDLONG startFrn = 0;
     while (true) {
+        if (isCancelled && isCancelled()) return false;
         med.StartFileReferenceNumber = startFrn;
         DWORD bytesReturned = 0;
         OVERLAPPED ov = {};

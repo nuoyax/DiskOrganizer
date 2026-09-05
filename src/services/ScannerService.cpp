@@ -17,10 +17,13 @@ ScannerService::ScannerService(QObject* parent) : QObject(parent) {}
 namespace {
 // 快速聚合目录总大小（文件数多时用 QDirIterator 顺序遍历，不做任何分配）。
 // 仅用于剪枝判断：小目录（总大小低于阈值）可整体跳过。
-qint64 dirTotalSize(const QString& dir) {
+// cancelled 可选：逐文件检查，取消后立即返回 -1。
+qint64 dirTotalSize(const QString& dir, const std::function<bool()>& cancelled = {}) {
     qint64 total = 0;
     QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+    int n = 0;
     while (it.hasNext()) {
+        if (cancelled && (++n & 1023) == 0 && cancelled()) return -1;
         it.next();
         total += it.fileInfo().size();
     }
@@ -134,7 +137,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         && !onProgress(count, r.path))
                         return false;
                     return true;
-                });
+                }, cancelledFn);
                 if (ok && !out.isEmpty()) return out;
                 // 失败（权限/日志缺失/取消）→ 回退遍历；已取消则直接返回
                 if (cancelledFn && cancelledFn()) return {};
@@ -160,7 +163,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 [&pruneCancelled, &cancelledFn, &root](const QString& sub) -> qint64 {
                     if (pruneCancelled.loadRelaxed()) return -1;
                     if (cancelledFn && cancelledFn()) { pruneCancelled.storeRelaxed(true); return -1; }
-                    return dirTotalSize(root + QLatin1Char('/') + sub);
+                    return dirTotalSize(root + QLatin1Char('/') + sub, cancelledFn);
                 });
             if (cancelledFn && cancelledFn()) return {};
             for (int i = 0; i < subDirs.size(); ++i) {
@@ -181,14 +184,20 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
 
     const qint64 minFile = minFileSizeBytes;
     auto results = QtConcurrent::blockingMapped(shards,
-        [this, &cancelled, &scannedCount, &onProgress, minFile](const QString& shard) -> QList<FileInfo> {
+        [this, &cancelled, &scannedCount, &onProgress, minFile, &cancelledFn](const QString& shard) -> QList<FileInfo> {
             QList<FileInfo> local;
             local.reserve(1024);
             QDirIterator it(shard, QDir::Files | QDir::NoDotAndDotDot,
                             QDirIterator::Subdirectories);
             int sinceReport = 0;
+            int cancelCheck = 0;
             while (it.hasNext()) {
                 if (cancelled.loadRelaxed()) break;
+                // onProgress 未设置时也要响应取消（每 512 项检查一次）
+                if (++cancelCheck >= 512) {
+                    cancelCheck = 0;
+                    if (cancelledFn && cancelledFn()) { cancelled.storeRelaxed(true); break; }
+                }
                 it.next();
                 const QFileInfo fi = it.fileInfo();
                 if (!fi.exists()) continue;
