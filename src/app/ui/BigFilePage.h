@@ -31,6 +31,7 @@ private:
     void populateResults();
 
     SearchableComboBox* m_driveCombo = nullptr;
+    QLineEdit* m_dirEdit = nullptr;     // 目录级扫描（空=整盘）
     SearchableComboBox* m_sizeCombo = nullptr;
     SearchableComboBox* m_extCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;

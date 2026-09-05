@@ -280,7 +280,7 @@ bool applyFixup(BYTE* rec, DWORD recSize) {
 
 bool UsnJournalReader::enumerateAllWithMeta(
     const std::function<bool(const Record&)>& onRecord, quint64 minFileSize,
-    const std::function<bool()>& isCancelled) {
+    const std::function<bool()>& isCancelled, const QString& pathPrefix) {
     if (m_volume == INVALID_HANDLE_VALUE || !onRecord) return false;
 
     MftLayout layout;
@@ -289,7 +289,8 @@ bool UsnJournalReader::enumerateAllWithMeta(
         return false;
     }
     LOG << "MFT layout: start=" << (quint64)layout.mftStartOffset
-          << " recSize=" << layout.bytesPerRecord;
+          << " recSize=" << layout.bytesPerRecord
+          << " prefix=" << pathPrefix;
 
     // 流水线读取 + 多线程解析（WizTree/Everything 同款思路）：
     // 记录之间完全独立，按块切分后并行解析；读下一块与解析当前块重叠，
@@ -445,6 +446,12 @@ bool UsnJournalReader::enumerateAllWithMeta(
         LOG << "MFT parse produced 0 nodes -> fail";
         return false;
     }
+    // 目录级前缀：统一为 "C:/dir" 形式（'/' 分隔，无尾斜杠），大小写不敏感匹配
+    QString prefix = pathPrefix;
+    if (!prefix.isEmpty()) {
+        prefix.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        while (prefix.endsWith(QLatin1Char('/'))) prefix.chop(1);
+    }
     LOG << "MFT parsed nodes=" << nodes.size() << " cancelled=" << (isCancelled && isCancelled());
 
     // 路径拼装：只为候选文件触发，沿父链向上找已缓存祖先，再逐级下拼。
@@ -488,6 +495,10 @@ bool UsnJournalReader::enumerateAllWithMeta(
         r.size = nd.size;
         r.lastModifiedMs = nd.mtimeMs;
         if (r.path.isEmpty()) continue;
+        // 目录级扫描：只回报指定子树内的文件（保留 '/' 前缀避免同前缀名误匹配）
+        if (!prefix.isEmpty()) {
+            if (!r.path.startsWith(prefix, Qt::CaseInsensitive)) continue;
+        }
         if (!onRecord(r)) break;
     }
     return true;

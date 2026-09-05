@@ -42,9 +42,11 @@ public:
     // minFileSize > 0 时，小于该字节数的文件在解析阶段即被跳过
     // （不建节点、不拼路径），大文件扫描可大幅提速并降低内存占用；
     // 目录始终保留（路径回溯需要）。失败返回 false（调用方可回退）。
+    // pathPrefix 非空时只回报该目录子树内的文件（目录级扫描，前缀形如 "C:/dir"）。
     bool enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord,
                               quint64 minFileSize = 0,
-                              const std::function<bool()>& isCancelled = {});
+                              const std::function<bool()>& isCancelled = {},
+                              const QString& pathPrefix = {});
 
     static bool isNtfs(wchar_t driveLetter);
 

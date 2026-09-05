@@ -11,6 +11,7 @@
 
 #include <QCheckBox>
 #include <QDateTime>
+#include <QDir>
 #include <QTimer>
 #include <functional>
 #include <QComboBox>
@@ -57,6 +58,11 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     for (const auto& d : drives)
         m_driveCombo->addItem(QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
             ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
+    m_driveCombo->setFixedWidth(260);
+    // 目录级扫描：可输入具体目录（如 C:/Users），留空 = 整盘扫描
+    m_dirEdit = new QLineEdit;
+    m_dirEdit->setPlaceholderText(tr("目录（可选，如 C:/Users，留空=整盘）"));
+    m_dirEdit->setFixedWidth(260);
     m_driveCombo->setFixedWidth(260);
     // 大小阈值：预设下拉（可搜索复用），单位 MB；起步 100MB（大文件定位场景）
     m_sizeCombo = new SearchableComboBox;
@@ -118,6 +124,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 
     filterRow->addWidget(new QLabel(tr("磁盘:")));
     filterRow->addWidget(m_driveCombo);
+    filterRow->addWidget(m_dirEdit);
     filterRow->addWidget(new QLabel(tr("大小:")));
     filterRow->addWidget(m_sizeCombo);
     filterRow->addWidget(new QLabel(tr("类型:")));
@@ -188,6 +195,21 @@ void BigFilePage::doScan() {
     m_summary->setText(tr("正在扫描……"));
 
     const QString targetDrive = m_driveCombo->currentData().toString();
+    // 目录级扫描：优先用输入的目录（必须与所选磁盘同卷）
+    QString scanRoot = targetDrive.isEmpty() ? QString() : targetDrive + "/";
+    const QString dirText = m_dirEdit->text().trimmed();
+    if (!dirText.isEmpty()) {
+        const QFileInfo dfi(dirText);
+        if (dfi.isDir()) {
+            scanRoot = QDir::fromNativeSeparators(dfi.absoluteFilePath());
+        } else {
+            m_summary->setText(tr("目录不存在：%1").arg(dirText));
+            m_scanning = false;
+            m_scanBtn->setText(tr("开始扫描"));
+            m_scanBtn->setIcon(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")));
+            return;
+        }
+    }
     BigFileFilter filter;
     filter.minSizeBytes = qMax(1, m_sizeCombo->currentData().toInt()) * 1024LL * 1024;
     // 类型下拉：data 为空格分隔的扩展名集合，拆成 QStringList 精确匹配
@@ -204,7 +226,7 @@ void BigFilePage::doScan() {
     // 进度由后台线程经QueuedConnection回UI：文件数 + 当前路径
     m_progress->setRange(0, 0);
 
-    QtConcurrent::run([this, targetDrive, filter, cancelled]() {
+    QtConcurrent::run([this, scanRoot, filter, cancelled]() {
         const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
         // 扫描中实时计时（参考 WizTree/TreeSize：状态栏显示已用时）
         const auto tickTimer = new QTimer(this);
@@ -237,14 +259,16 @@ void BigFilePage::doScan() {
         // 总大小低于阈值×2 的小目录整体跳过（零碎文件不值得遍历）
         const qint64 minFile = filter.minSizeBytes;
         const qint64 minDir = qMax<qint64>(minFile * 2, 16LL * 1024 * 1024);
-        if (targetDrive.isEmpty()) {
+        if (scanRoot.isEmpty()) {
+            // 整盘：枚举所有磁盘逐个扫
             for (const auto& d : enumerateDisks()) {
                 if (cancelled()) break;
                 if (d.driveLetter.startsWith("A:") || d.driveLetter.startsWith("B:")) continue;
                 all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress, minFile, minDir, cancelled);
             }
         } else {
-            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress, minFile, minDir, cancelled);
+            // 整卷或目录级（MFT 快速路径均支持，目录按前缀过滤）
+            all = scanner.scanBlocking(QStringList{scanRoot}, onProgress, minFile, minDir, cancelled);
         }
         if (cancelled()) return QList<FileInfo>();
         BigFileFinder finder;

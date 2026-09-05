@@ -96,8 +96,9 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
         const QString root = rootPaths.first();
         LOG << "scanBlocking root=" << root
               << " minFile=" << minFileSizeBytes << " minDir=" << minDirTotalBytes;
-        if (root.length() >= 2 && root[1] == QLatin1Char(':')
-            && root[0].isLetter()) {
+        // 整卷（"C:"/"C:/"）或卷内目录（"C:/dir"）都走 MFT 快速路径：
+        // MFT 全量枚举后按路径前缀过滤，目录级扫描同样秒级。
+        if (root.length() >= 2 && root[1] == QLatin1Char(':') && root[0].isLetter()) {
             DiskOrganizer::UsnJournalReader usn;
             if (usn.open(root[0].toLatin1())) {
                 LOG << "USN volume opened, trying MFT direct read";
@@ -122,7 +123,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         && !onProgress(count, r.path))
                         return false;
                     return true;
-                }, quint64(minFileSizeBytes), cancelledFn);
+                }, quint64(minFileSizeBytes), cancelledFn, root);
                 LOG << "enumerateAllWithMeta ok=" << ok << " records=" << out.size();
                 if (ok) return out; // 成功即返回（含 0 条 = 阈值下无匹配文件，属正常结果）
                 // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
