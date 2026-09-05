@@ -3,6 +3,7 @@
 #include "models/FileInfo.h"
 
 #include <QList>
+#include <atomic>
 
 class QComboBox;
 class QLabel;
@@ -37,7 +38,9 @@ private:
     QPushButton* m_scanBtn = nullptr;
     QPushButton* m_deleteBtn = nullptr;
 
-    QList<FileInfo> m_files;               // 扫描结果（全盘，含 drive 字段在 path 中）
+    QList<FileInfo> m_files;
+    std::atomic<bool> m_scanCancelled{false};   // 取消令牌
+    bool m_scanning = false;
 };
 
 } // namespace DiskOrganizer

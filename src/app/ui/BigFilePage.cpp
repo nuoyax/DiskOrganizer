@@ -8,6 +8,7 @@
 #include "Charts.h"
 
 #include <QCheckBox>
+#include <functional>
 #include <QComboBox>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -106,7 +107,15 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 }
 
 void BigFilePage::doScan() {
-    m_scanBtn->setEnabled(false);
+    // 扫描中再点 = 取消
+    if (!m_scanBtn->isEnabled() || m_scanning) {
+        m_scanCancelled = true;
+        return;
+    }
+    m_scanning = true;
+    m_scanBtn->setText(tr("取消扫描"));
+    m_scanBtn->setEnabled(true);
+    m_scanBtn->setIcon(Icons::tinted(QString::fromUtf8(Icons::P::warning), QColor("white")));
     m_deleteBtn->setEnabled(false);
     m_table->setRowCount(0);
     m_progress->setRange(0, 0);
@@ -119,21 +128,48 @@ void BigFilePage::doScan() {
     if (!extText.isEmpty()) filter.extensionFilter = extText;
     filter.topN = 500;
 
-    QtConcurrent::run([targetDrive, filter]() {
+    // 取消令牌：扫描中再点按钮即置位
+    m_scanCancelled.store(false);
+    auto cancelled = [this]() { return m_scanCancelled.load(); };
+
+    // 进度由后台线程经QueuedConnection回UI：文件数 + 当前路径
+    m_progress->setRange(0, 0);
+
+    QtConcurrent::run([this, targetDrive, filter, cancelled]() {
         ScannerService scanner;
+        // 进度回调：更新忙碌条 + 汇总文本（跨线程→Queued）
+        std::function<bool(qint64, const QString&)> onProgress =
+            [this, cancelled](qint64 n, const QString& path) -> bool {
+            if (cancelled()) return false;
+            QMetaObject::invokeMethod(this, [this, n, path]() {
+                m_summary->setText(tr("已扫描 %1 个文件  %2").arg(n).arg(path));
+            }, Qt::QueuedConnection);
+            return true;
+        };
         QList<FileInfo> all;
         if (targetDrive.isEmpty()) {
             for (const auto& d : enumerateDisks()) {
+                if (cancelled()) break;
                 if (d.driveLetter.startsWith("A:") || d.driveLetter.startsWith("B:")) continue;
-                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"});
+                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress);
             }
         } else {
-            all = scanner.scanBlocking(QStringList{targetDrive + "/"});
+            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress);
         }
+        if (cancelled()) return QList<FileInfo>();
         BigFileFinder finder;
         return finder.find(all, filter);
     }).then(this, [this](QList<FileInfo> result) {
+        m_scanning = false;
+        m_scanBtn->setText(tr("开始扫描"));
+        m_scanBtn->setIcon(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")));
         m_progress->setRange(0, 1);
+        if (m_scanCancelled) {
+            m_progress->setValue(0);
+            m_summary->setText(tr("扫描已取消"));
+            m_scanBtn->setEnabled(true);
+            return;
+        }
         m_progress->setValue(1);
         m_files = result;
         populateResults();

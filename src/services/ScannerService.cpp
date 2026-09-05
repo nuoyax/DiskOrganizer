@@ -66,9 +66,12 @@ void ScannerService::startScan(const QStringList& rootPaths) {
     });
 }
 
-QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths) {
+QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
+    const std::function<bool(qint64, const QString&)>& onProgress) {
     QList<FileInfo> out;
+    qint64 scanned = 0;
     for (const QString& root : rootPaths) {
+        if (m_cancelRequested) break;
         if (!QFileInfo::exists(root)) continue;
         QDirIterator it(root, QDir::Files | QDir::NoDotAndDotDot,
                         QDirIterator::Subdirectories);
@@ -86,6 +89,12 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths) {
             info.extension = fi.suffix().isEmpty()
                 ? QString() : QLatin1Char('.') + fi.suffix().toLower();
             out.append(info);
+            if (onProgress && (++scanned % 512 == 0)) {
+                if (!onProgress(scanned, info.absolutePath)) {
+                    m_cancelRequested = true;
+                    break;
+                }
+            }
         }
     }
     return out;
