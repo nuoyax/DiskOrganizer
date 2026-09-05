@@ -11,6 +11,8 @@ public:
 
     void startScan(const QStringList& rootPaths);
     void cancel();
+    // 同步扫描（调用方自行放入后台线程）；返回所有条目（文件+目录）
+    QList<FileInfo> scanBlocking(const QStringList& rootPaths);
 
 signals:
     void progress(int percent, const QString& currentPath);

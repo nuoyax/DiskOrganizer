@@ -4,20 +4,19 @@ qt_add_executable(DiskOrganizer
     ui/MainWindow.h
     ui/MainWindow.cpp
     ui/PageBase.h
+    ui/FlatStyle.h
+    ui/Charts.h
+    ui/Charts.cpp
     ui/CleanPage.h
     ui/CleanPage.cpp
     ui/DuplicatePage.h
     ui/DuplicatePage.cpp
+    ui/BigFilePage.h
+    ui/BigFilePage.cpp
     ui/DefragPage.h
     ui/DefragPage.cpp
     ui/SpaceAnalyzerPage.h
     ui/SpaceAnalyzerPage.cpp
-    ui/CleanPage.h
-    ui/CleanPage.cpp
-    ui/DuplicatePage.h
-    ui/DuplicatePage.cpp
-    ui/DefragPage.h
-    ui/DefragPage.cpp
     ui/SettingsDialog.h
     ui/SettingsDialog.cpp
 )

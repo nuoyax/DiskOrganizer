@@ -66,6 +66,31 @@ void ScannerService::startScan(const QStringList& rootPaths) {
     });
 }
 
+QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths) {
+    QList<FileInfo> out;
+    for (const QString& root : rootPaths) {
+        if (!QFileInfo::exists(root)) continue;
+        QDirIterator it(root, QDir::Files | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            const QFileInfo fi = it.fileInfo();
+            if (!fi.exists()) continue;
+            FileInfo info;
+            info.absolutePath = fi.absoluteFilePath();
+            info.name = fi.fileName();
+            info.size = fi.size();
+            info.lastModified = fi.lastModified().toMSecsSinceEpoch();
+            info.isDir = false;
+            info.isSymlink = fi.isSymLink();
+            info.extension = fi.suffix().isEmpty()
+                ? QString() : QLatin1Char('.') + fi.suffix().toLower();
+            out.append(info);
+        }
+    }
+    return out;
+}
+
 void ScannerService::cancel() {
     g_cancelRequested = true;
 }

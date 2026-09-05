@@ -10,6 +10,8 @@
 #include "DuplicatePage.h"
 #include "DefragPage.h"
 #include "SpaceAnalyzerPage.h"
+#include "BigFilePage.h"
+#include "Charts.h"
 #include "util/SizeFormatter.h"
 #include "util/FileSystemUtil.h"
 
@@ -39,17 +41,24 @@ void MainWindow::buildUi() {
     auto* overview = new QWidget(this);
     auto* v = new QVBoxLayout(overview);
     auto* hint = new QLabel(tr("双击磁盘行进入空间分析"), overview);
-    hint->setStyleSheet("color: gray;");
+    hint->setStyleSheet("color:#636E88; background:transparent;");
     v->addWidget(hint);
-    v->addWidget(m_diskTable);
+
+    auto* charts = new QHBoxLayout;
+    charts->addWidget(m_diskPie = new PieChart, 1);
+    charts->addWidget(m_diskBar = new BarChart, 1);
+    v->addLayout(charts);
+    v->addWidget(m_diskTable, 1);
     m_tabs->addTab(overview, tr("磁盘概览"));
 
     m_cleanPage = new CleanPage(this);
     m_duplicatePage = new DuplicatePage(this);
     m_analyzerPage = new SpaceAnalyzerPage(this);
     m_defragPage = new DefragPage(this);
+    m_bigFilePage = new BigFilePage(this);
     m_tabs->addTab(m_cleanPage, tr("垃圾清理"));
     m_tabs->addTab(m_duplicatePage, tr("重复文件"));
+    m_tabs->addTab(m_bigFilePage, tr("大文件"));
     m_tabs->addTab(m_analyzerPage, tr("空间分析"));
     m_tabs->addTab(m_defragPage, tr("碎片整理"));
 
@@ -88,6 +97,18 @@ void MainWindow::refreshDisks() {
         setItem(4, formatSize(d.freeBytes));
         setItem(5, QString::number(d.usedRatio() * 100, 'f', 1) + '%');
     }
+
+    // 图表：各磁盘 已用/可用 空间
+    QList<QPair<QString, double>> pie, bar;
+    for (const auto& d : disks) {
+        if (d.totalBytes <= 0) continue;
+        const QString label = d.volumeLabel.isEmpty() ? d.driveLetter : d.driveLetter + " " + d.volumeLabel;
+        pie.append({label + tr(" 已用"), double(d.totalBytes - d.freeBytes)});
+        pie.append({label + tr(" 可用"), double(d.freeBytes)});
+        bar.append({label, double(d.totalBytes - d.freeBytes)});
+    }
+    m_diskPie->setData(pie);
+    m_diskBar->setData(bar);
 }
 
 void MainWindow::openDiskInAnalyzer(int row, int column) {
