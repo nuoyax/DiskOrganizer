@@ -35,6 +35,11 @@ public:
     // 返回是否成功完整枚举（失败可能因权限/非 NTFS/中途错误）
     bool enumerateAll(const std::function<bool(const Record&)>& onRecord);
 
+    // 增强版：直接读取原始 $MFT 解析 $FILE_NAME 属性，
+    // Record 同时带 size 与 lastModifiedMs（USN 记录本身不含这些字段）。
+    // 仍会拼路径；失败返回 false（调用方可回退 enumerateAll 或目录遍历）。
+    bool enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord);
+
     static bool isNtfs(wchar_t driveLetter);
 
 private:

@@ -79,7 +79,27 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 QList<FileInfo> out;
                 out.reserve(200000);
                 qint64 count = 0;
-                const bool ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
+                // 优先带元数据版本（size/mtime 来自 MFT $FILE_NAME），
+                // 失败再退到纯 USN 枚举，最后才回退目录遍历。
+                bool ok = usn.enumerateAllWithMeta([&](const DiskOrganizer::UsnJournalReader::Record& r) {
+                    FileInfo info;
+                    info.absolutePath = r.path;
+                    info.name = r.path.section(QLatin1Char('/'), -1);
+                    info.isDir = r.isDirectory;
+                    info.isSymlink = false;
+                    info.size = r.size;
+                    info.extension = info.name.contains(QLatin1Char('.'))
+                        ? QLatin1Char('.') + info.name.section(QLatin1Char('.'), -1).toLower()
+                        : QString();
+                    out.append(info);
+                    if (onProgress && (++count % 4096 == 0)
+                        && !onProgress(count, r.path))
+                        return false;
+                    return true;
+                });
+                if (ok && !out.isEmpty()) return out;
+                // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
+                ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
                     FileInfo info;
                     info.absolutePath = r.path;
                     info.name = r.path.section(QLatin1Char('/'), -1);
