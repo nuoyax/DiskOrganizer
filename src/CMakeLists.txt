@@ -20,11 +20,9 @@ qt_add_library(diskorganizer_core STATIC
     services/ReportService.h
     services/ReportService.cpp
     util/FileSystemUtil.h
-    util/FileSystemUtil.cpp
     util/SizeFormatter.h
     util/SizeFormatter.cpp
     util/HashUtil.h
-    util/HashUtil.cpp
 )
 
 add_subdirectory(app)

@@ -3,8 +3,15 @@ qt_add_executable(DiskOrganizer
     main.cpp
     ui/MainWindow.h
     ui/MainWindow.cpp
-    ui/ScanResultView.h
-    ui/ScanResultView.cpp
+    ui/PageBase.h
+    ui/CleanPage.h
+    ui/CleanPage.cpp
+    ui/DuplicatePage.h
+    ui/DuplicatePage.cpp
+    ui/DefragPage.h
+    ui/DefragPage.cpp
+    ui/SpaceAnalyzerPage.h
+    ui/SpaceAnalyzerPage.cpp
     ui/CleanPage.h
     ui/CleanPage.cpp
     ui/DuplicatePage.h
