@@ -10,6 +10,8 @@
 #include "Charts.h"
 
 #include <QCheckBox>
+#include <QComboBox>
+#include <QHash>
 #include <QSignalBlocker>
 #include <QDateTime>
 #include <QDir>
@@ -179,23 +181,64 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     // 表头全选复选框
     m_headerCheck = new QCheckBox(m_table);
     m_headerCheck->setStyleSheet("QCheckBox::indicator{width:16px;height:16px}");
-    m_headerCheck->setToolTip(tr("全选/全不选"));
+    m_headerCheck->setToolTip(tr("全选/全不选（仅当前页）"));
     connect(m_headerCheck, &QCheckBox::toggled, this, [this](bool on) {
         m_table->setSortingEnabled(false);
         for (int r = 0; r < m_table->rowCount(); ++r) {
-            if (auto* it = m_table->item(r, kColCheck)) it->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+            auto* it = m_table->item(r, kColCheck);
+            if (!it) continue;
+            it->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+            // 同步到跨页勾选集合（路径列去原生分隔符）
+            const QString path = QDir::fromNativeSeparators(m_table->item(r, kColPath)->text());
+            if (on) m_checkedPaths.insert(path); else m_checkedPaths.remove(path);
         }
         m_table->setSortingEnabled(true);
         updateDeleteButtonState();
     });
     root->addWidget(m_table, 1);
 
+    // 分页栏：每页条数 + 上一页/下一页 + 页码（"最多展示20跳一页，也可一页100条滚动"）
+    auto* pageRow = new QHBoxLayout;
+    pageRow->addWidget(new QLabel(tr("每页")));
+    m_pageSizeCombo = new QComboBox;
+    m_pageSizeCombo->addItem(QStringLiteral("20"), 20);
+    m_pageSizeCombo->addItem(QStringLiteral("100"), 100);
+    m_pageSizeCombo->setFixedWidth(70);
+    pageRow->addWidget(m_pageSizeCombo);
+    pageRow->addWidget(new QLabel(tr("条")));
+    m_prevBtn = new QPushButton(tr("上一页"));
+    m_nextBtn = new QPushButton(tr("下一页"));
+    m_prevBtn->setFixedWidth(70);
+    m_nextBtn->setFixedWidth(70);
+    m_pageLabel = new QLabel;
+    m_pageLabel->setStyleSheet("color:#636E88; background:transparent;");
+    pageRow->addWidget(m_prevBtn);
+    pageRow->addWidget(m_pageLabel);
+    pageRow->addWidget(m_nextBtn);
+    pageRow->addStretch();
+    root->addLayout(pageRow);
+
+    auto gotoPage = [this](int page) {
+        const int tp = qMax(1, totalPages());
+        m_currentPage = qBound(0, page, tp - 1);
+        renderPage();
+    };
+    connect(m_prevBtn, &QPushButton::clicked, this, [this, gotoPage]() { gotoPage(m_currentPage - 1); });
+    connect(m_nextBtn, &QPushButton::clicked, this, [this, gotoPage]() { gotoPage(m_currentPage + 1); });
+    connect(m_pageSizeCombo, &QComboBox::currentIndexChanged, this, [this, gotoPage](int) {
+        m_pageSize = m_pageSizeCombo->currentData().toInt();
+        gotoPage(0);
+    });
+
     connect(m_scanBtn, &QPushButton::clicked, this, &BigFilePage::doScan);
     connect(m_deleteBtn, &QPushButton::clicked, this, &BigFilePage::doDelete);
-    // 勾选变化 → 删除按钮可用性 + 全选框三态
+    // 勾选变化 → 同步跨页集合 + 删除按钮可用性 + 全选框三态
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
         if (it->column() != kColCheck) return;
+        const QString path = QDir::fromNativeSeparators(m_table->item(it->row(), kColPath)->text());
         QSignalBlocker blocker(m_headerCheck);
+        if (it->checkState() == Qt::Checked) m_checkedPaths.insert(path);
+        else m_checkedPaths.remove(path);
         int checked = 0;
         for (int r = 0; r < m_table->rowCount(); ++r)
             if (m_table->item(r, kColCheck)->checkState() == Qt::Checked) ++checked;
@@ -207,10 +250,8 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 }
 
 void BigFilePage::updateDeleteButtonState() {
-    int checked = 0;
-    for (int r = 0; r < m_table->rowCount(); ++r)
-        if (m_table->item(r, kColCheck) && m_table->item(r, kColCheck)->checkState() == Qt::Checked)
-            ++checked;
+    // 勾选按路径跨页保留：以集合大小为准（非当前页行数）
+    const int checked = m_checkedPaths.size();
     m_deleteBtn->setEnabled(checked > 0);
     m_deleteBtn->setText(checked > 0
         ? tr("删除勾选文件 (%1)").arg(checked) : tr("删除选中文件"));
@@ -258,6 +299,7 @@ void BigFilePage::doScan() {
     // 取消令牌：扫描中再点按钮即置位
     m_scanCancelled.store(false);
     m_lastScanElapsedMs.store(0);
+    m_checkedPaths.clear();
     auto cancelled = [this]() { return m_scanCancelled.load(); };
 
     // 进度由后台线程经QueuedConnection回UI：文件数 + 当前路径
@@ -349,15 +391,31 @@ void BigFilePage::doScan() {
 }
 
 void BigFilePage::populateResults() {
+    // 新扫描结果：清空跨页勾选，回到第 1 页
+    m_checkedPaths.clear();
+    m_currentPage = 0;
+    renderPage();
+}
+
+int BigFilePage::totalPages() const {
+    return (m_files.size() + m_pageSize - 1) / m_pageSize;
+}
+
+void BigFilePage::renderPage() {
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);
+    // 当前页切片（m_files 已按大小排序；排序由表头触发时重新切片）
+    const int total = m_files.size();
+    const int begin = qBound(0, m_currentPage * m_pageSize, total);
+    const int end = qMin(begin + m_pageSize, total);
     const auto makeRow = [this](const FileInfo& f) {
         const int r = m_table->rowCount();
         m_table->insertRow(r);
         // 复选框列（行选择以复选框为准）
         auto* itCheck = new QTableWidgetItem;
         itCheck->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        itCheck->setCheckState(Qt::Unchecked);
+        // 勾选状态按路径跨页保留
+        itCheck->setCheckState(m_checkedPaths.contains(f.absolutePath) ? Qt::Checked : Qt::Unchecked);
         // 磁盘列
         auto* itDrive = new QTableWidgetItem(f.absolutePath.left(2).toUpper());
         // 文件大小列：原始字节数作 DisplayRole 排序键，展示用 formatSize
@@ -376,33 +434,46 @@ void BigFilePage::populateResults() {
         m_table->setItem(r, kColPath, itPath);
         m_table->setItem(r, kColMtime, itTime);
     };
+    // 分组模式也走统一分页（组内顺序展示，页切片全局生效）
+    const QList<FileInfo> pageFiles = m_files.mid(begin, end - begin);
     if (m_groupByDrive->isChecked()) {
         QMap<QString, QList<const FileInfo*>> byDrive;
-        for (const auto& f : m_files)
+        for (const auto& f : pageFiles)
             byDrive[f.absolutePath.left(2).toUpper()].append(&f);
         for (auto it = byDrive.constBegin(); it != byDrive.constEnd(); ++it)
             for (const FileInfo* f : it.value())
                 makeRow(*f);
     } else {
-        for (const auto& f : m_files) makeRow(f);
+        for (const auto& f : pageFiles) makeRow(f);
     }
     m_table->setSortingEnabled(true);
-    m_headerCheck->setVisible(m_table->rowCount() > 0);
-    m_headerCheck->setChecked(false);
+    m_headerCheck->setVisible(total > 0);
+    m_headerCheck->setChecked(m_table->rowCount() > 0 && !m_checkedPaths.isEmpty()
+        && [this]() {
+            // 当前页全部已勾选才亮起（三态由 itemChanged 维护）
+            int checked = 0;
+            for (int r = 0; r < m_table->rowCount(); ++r)
+                if (m_table->item(r, kColCheck)->checkState() == Qt::Checked) ++checked;
+            return checked == m_table->rowCount() ? true : (checked > 0, false);
+        }());
+    // 分页栏状态
+    const int tp = qMax(1, totalPages());
+    m_pageLabel->setText(tr("第 %1 / %2 页，共 %3 条").arg(m_currentPage + 1).arg(tp).arg(total));
+    m_prevBtn->setEnabled(m_currentPage > 0);
+    m_nextBtn->setEnabled(m_currentPage < tp - 1);
     updateDeleteButtonState();
 }
 
 void BigFilePage::doDelete() {
-    // 以复选框勾选为准（支持跨页/排序后稳定选择）
+    // 以跨页勾选集合为准（分页/排序后稳定），从 m_files 取大小
+    QHash<QString, qint64> sizeOf;
+    for (const auto& f : m_files) sizeOf.insert(f.absolutePath, f.size);
     QList<CleanItem> items;
-    for (int r = 0; r < m_table->rowCount(); ++r) {
-        auto* itCheck = m_table->item(r, kColCheck);
-        if (!itCheck || itCheck->checkState() != Qt::Checked) continue;
-        const QString path = QDir::fromNativeSeparators(m_table->item(r, kColPath)->text());
+    for (const QString& path : qAsConst(m_checkedPaths)) {
         CleanItem it;
         it.category = CleanCategory::CustomRules;
         it.path = path;
-        it.size = m_table->item(r, kColSize)->data(Qt::DisplayRole).toLongLong();
+        it.size = sizeOf.value(path, 0);
         it.safeToDelete = true;
         it.description = tr("大文件清理");
         items.append(it);

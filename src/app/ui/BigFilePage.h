@@ -3,6 +3,7 @@
 #include "models/FileInfo.h"
 
 #include <QList>
+#include <QSet>
 #include <atomic>
 
 class QComboBox;
@@ -29,6 +30,8 @@ private slots:
 
 private:
     void populateResults();
+    void renderPage();          // 渲染当前页切片（m_files → 表格）
+    int totalPages() const;
     void updateDeleteButtonState();
 
     SearchableComboBox* m_driveCombo = nullptr;
@@ -45,6 +48,16 @@ private:
     QPushButton* m_deleteBtn = nullptr;
 
     QList<FileInfo> m_files;
+
+    // 分页：每页条数可切换（20 跳页 / 100 滚动），勾选按路径跨页保留
+    QComboBox* m_pageSizeCombo = nullptr;
+    QLabel* m_pageLabel = nullptr;
+    QPushButton* m_prevBtn = nullptr;
+    QPushButton* m_nextBtn = nullptr;
+    int m_pageSize = 20;
+    int m_currentPage = 0;
+    QSet<QString> m_checkedPaths;   // 已勾选文件的绝对路径（跨页保留）
+
     std::atomic<bool> m_scanCancelled{false};   // 取消令牌
     std::atomic<qint64> m_lastScanElapsedMs{0}; // 上次扫描耗时（后台线程写、UI 读）
     bool m_scanning = false;
