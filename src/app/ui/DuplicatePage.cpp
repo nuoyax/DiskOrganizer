@@ -1,4 +1,4 @@
-#include "ui/DuplicatePage.h"
+#include "DuplicatePage.h"
 #include <QLabel>
 #include <QVBoxLayout>
 

@@ -1,6 +1,6 @@
 #pragma once
 #include <QString>
-#include <qint64>
+#include <QtGlobal>
 
 // 单个文件/目录的元信息
 struct FileInfo {

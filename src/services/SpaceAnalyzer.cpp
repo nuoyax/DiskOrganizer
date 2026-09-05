@@ -1,4 +1,5 @@
 #include "services/SpaceAnalyzer.h"
+#include <QFileInfo>
 #include <QHash>
 #include <algorithm>
 
@@ -23,7 +24,7 @@ QList<QPair<QString, qint64>> SpaceAnalyzer::directorySizes(const QList<FileInfo
     return out;
 }
 
-QList<SpaceAnalyzer::TypeStat> SpaceAnalyzer::typeDistribution(const QList<FileInfo>& files) const {
+QList<TypeStat> SpaceAnalyzer::typeDistribution(const QList<FileInfo>& files) const {
     QHash<QString, TypeStat> stats;
     for (const auto& f : files) {
         if (f.isDir) continue;

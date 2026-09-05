@@ -1,3 +1,5 @@
 #include "models/FileInfo.h"
 
-FileInfo::FileInfo() = default;
+// FileInfo 为聚合结构，无自定义构造逻辑；此 TU 保持目标非空
+namespace DiskOrganizer {
+}

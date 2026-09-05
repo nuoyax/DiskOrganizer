@@ -25,9 +25,9 @@ if(WIN32)
         UNICODE _UNICODE
     )
     if(MSVC)
-        add_compile_options(/MP /W4 /permissive-)
-        # 静态运行时（配合 Qt 静态库）
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        add_compile_options(/MP /W3 /permissive-)
+        # 本机 Qt 静态库以 /MD(runtime MD_DynamicRelease, _MSC_VER=1900) 构建，必须匹配
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
     endif()
 endif()
 

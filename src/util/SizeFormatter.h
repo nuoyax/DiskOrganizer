@@ -1,6 +1,6 @@
 #pragma once
 #include <QString>
-#include <qint64>
+#include <QtGlobal>
 
 namespace DiskOrganizer {
 

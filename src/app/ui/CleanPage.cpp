@@ -1,4 +1,4 @@
-#include "ui/CleanPage.h"
+#include "CleanPage.h"
 #include <QLabel>
 #include <QVBoxLayout>
 

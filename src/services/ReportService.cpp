@@ -22,7 +22,7 @@ bool ReportService::exportDuplicateReport(const QString& filePath, const QList<D
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
     for (const auto& g : groups) {
-        ts << "== group, wasted " << SizeFormatter::formatSize(g.wastedBytes) << " ==\n";
+        ts << "== group, wasted " << DiskOrganizer::formatSize(g.wastedBytes) << " ==\n";
         for (const auto& fi : g.files) ts << fi.absolutePath << "\n";
     }
     return true;

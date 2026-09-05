@@ -4,7 +4,7 @@
 namespace DiskOrganizer {
 
 QString formatSize(qint64 bytes) {
-    if (bytes < 0) return QObject::tr("未知");
+    if (bytes < 0) return QStringLiteral("--");
     static const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
     int unit = 0;
     double value = (double)bytes;

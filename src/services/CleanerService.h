@@ -1,7 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QStringList>
-#include <qint64>
+#include <QtGlobal>
 
 // 可清理项类型
 enum class CleanCategory {

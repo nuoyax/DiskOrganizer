@@ -1,4 +1,4 @@
-#include "ui/SpaceAnalyzerPage.h"
+#include "SpaceAnalyzerPage.h"
 #include <QLabel>
 #include <QVBoxLayout>
 

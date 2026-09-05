@@ -10,7 +10,8 @@ bool DefragService::isSsd(const QString& drive) {
         QString("(Get-Partition -DriveLetter '%1').DiskNumber | ForEach-Object { "
                 "(Get-PhysicalDisk -DeviceNumber $_).MediaType }").arg(drive.left(1))});
     p.waitForFinished(10000);
-    return p.readAllStandardOutput().trimmed().contains("SSD", Qt::CaseInsensitive);
+    return QString::fromLocal8Bit(p.readAllStandardOutput())
+        .contains("SSD", Qt::CaseInsensitive);
 }
 
 static DefragResult runDefrag(const QStringList& args) {

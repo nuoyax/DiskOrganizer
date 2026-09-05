@@ -1,5 +1,5 @@
 #pragma once
-#include "ui/PageBase.h"
+#include "PageBase.h"
 
 namespace DiskOrganizer {
 class SpaceAnalyzerPage : public PageBase {
