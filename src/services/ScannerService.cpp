@@ -1,5 +1,6 @@
 #include "services/ScannerService.h"
 #include "services/UsnJournalReader.h"
+#include "services/Logger.h"
 #include <QDir>
 #include <QDirIterator>
 #include <QDateTime>
@@ -93,9 +94,12 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     // cancelled：上层取消令牌（取消后不再回退遍历，直接返回空）。
     if (rootPaths.size() == 1) {
         const QString root = rootPaths.first();
+        LOG << "scanBlocking root=" << root
+              << " minFile=" << minFileSizeBytes << " minDir=" << minDirTotalBytes;
         if ((root.length() == 2 || root.length() == 3) && root[1] == QLatin1Char(':')) {
             DiskOrganizer::UsnJournalReader usn;
             if (usn.open(root[0].toLatin1())) {
+                LOG << "USN volume opened, trying MFT direct read";
                 QList<FileInfo> out;
                 out.reserve(200000);
                 qint64 count = 0;
@@ -118,6 +122,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         return false;
                     return true;
                 }, quint64(minFileSizeBytes), cancelledFn);
+                LOG << "enumerateAllWithMeta ok=" << ok << " records=" << out.size();
                 if (ok && !out.isEmpty()) return out;
                 // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
                 if (cancelledFn && cancelledFn()) return {};
@@ -138,6 +143,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         return false;
                     return true;
                 }, cancelledFn);
+                LOG << "enumerateAll(plain) ok=" << ok << " records=" << out.size();
                 if (ok && !out.isEmpty()) return out;
                 // 失败（权限/日志缺失/取消）→ 回退遍历；已取消则直接返回
                 if (cancelledFn && cancelledFn()) return {};
@@ -146,6 +152,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     }
 
     // 并行扫描：先把各根目录展开成一级子目录分片，再 blockingMapped 多线程遍历。
+    LOG << "scanBlocking FALLBACK to directory walk, roots=" << rootPaths.join(',');
     // 磁盘根目录的一级子目录往往分布在不同目录树分支，并行度好。
     // 大文件扫描加速：先快速聚合每个一级子目录的总大小，
     // 低于 minDirTotalBytes 的整个目录（含零碎小文件）直接剪掉，不再遍历。
@@ -229,6 +236,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
 
     QList<FileInfo> out;
     for (const auto& r : results) out += r;
+    LOG << "dir walk done, files=" << out.size();
     return out;
 }
 

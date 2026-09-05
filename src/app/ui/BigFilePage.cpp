@@ -5,6 +5,7 @@
 #include "util/SizeFormatter.h"
 #include "services/ScannerService.h"
 #include "services/BigFileFinder.h"
+#include "services/Logger.h"
 #include "services/CleanerService.h"
 #include "Charts.h"
 
@@ -230,7 +231,10 @@ void BigFilePage::doScan() {
         }
         if (cancelled()) return QList<FileInfo>();
         BigFileFinder finder;
-        return finder.find(all, filter);
+        auto result = finder.find(all, filter);
+        LOG << "scan finished, raw=" << all.size() << " filtered=" << result.size()
+              << " cancelled=" << cancelled();
+        return result;
     }).then(this, [this](QList<FileInfo> result) {
         m_scanning = false;
         m_scanBtn->setText(tr("开始扫描"));

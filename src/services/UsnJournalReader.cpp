@@ -1,4 +1,5 @@
 #include "services/UsnJournalReader.h"
+#include "services/Logger.h"
 
 #include <QHash>
 #include <QString>
@@ -25,7 +26,10 @@ bool UsnJournalReader::open(wchar_t driveLetter) {
     m_volume = CreateFileW(reinterpret_cast<const wchar_t*>(volumePath.utf16()),
                            GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_EXISTING, 0, nullptr);
-    if (m_volume == INVALID_HANDLE_VALUE) return false;
+    if (m_volume == INVALID_HANDLE_VALUE) {
+        LOG << "open volume FAILED err=" << GetLastError();
+        return false;
+    }
     m_drive = driveLetter;
     m_frnPathCache.clear();
     return true;
@@ -104,7 +108,10 @@ bool UsnJournalReader::enumerateAll(
                 && GetOverlappedResult(m_volume, &ov, &bytesReturned, FALSE);
         }
         CloseHandle(ov.hEvent);
-        if (!got) break; // ERROR_HANDLE_EOF 或其他错误 = 枚举完成
+        if (!got) {
+            LOG << "USN enum ended err=" << GetLastError() << " nodes=" << nodes.size();
+            break; // ERROR_HANDLE_EOF 或其他错误 = 枚举完成
+        }
         if (bytesReturned <= sizeof(DWORDLONG)) break;
 
         DWORDLONG nextFrn = 0;
@@ -277,7 +284,12 @@ bool UsnJournalReader::enumerateAllWithMeta(
     if (m_volume == INVALID_HANDLE_VALUE || !onRecord) return false;
 
     MftLayout layout;
-    if (!getMftLayout(m_volume, layout)) return false;
+    if (!getMftLayout(m_volume, layout)) {
+        LOG << "getMftLayout FAILED err=" << GetLastError();
+        return false;
+    }
+    LOG << "MFT layout: start=" << (quint64)layout.mftStartOffset
+          << " recSize=" << layout.bytesPerRecord;
 
     // 流水线读取 + 多线程解析（WizTree/Everything 同款思路）：
     // 记录之间完全独立，按块切分后并行解析；读下一块与解析当前块重叠，
@@ -429,7 +441,11 @@ bool UsnJournalReader::enumerateAllWithMeta(
         bufs[c].reset(); // 释放该块原始缓冲
     }
 
-    if (nodes.empty()) return false;
+    if (nodes.empty()) {
+        LOG << "MFT parse produced 0 nodes -> fail";
+        return false;
+    }
+    LOG << "MFT parsed nodes=" << nodes.size() << " cancelled=" << (isCancelled && isCancelled());
 
     // 路径拼装：只为候选文件触发，沿父链向上找已缓存祖先，再逐级下拼。
     // 目录节点不再全量预拼（百万级目录的 QString 拼接是此前的最大热点）。
