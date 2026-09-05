@@ -32,6 +32,7 @@ target_link_libraries(DiskOrganizer PRIVATE
 
 set_target_properties(DiskOrganizer PROPERTIES
     WIN32_EXECUTABLE TRUE
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build
 )
 
 install(TARGETS DiskOrganizer RUNTIME DESTINATION .)
