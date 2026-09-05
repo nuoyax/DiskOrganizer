@@ -1,11 +1,11 @@
 #include "services/Logger.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QMutex>
 #include <QThread>
 #include <QFile>
 #include <QDir>
-#include <QStandardPaths>
 
 namespace DiskOrganizer {
 
@@ -17,9 +17,9 @@ Logger& Logger::instance() {
 void Logger::write(const QString& line) {
     static QMutex mutex;
     QMutexLocker lock(&mutex);
-    // %LOCALAPPDATA%/DiskOrganizer/DiskOrganizer.log（UAC 提权后 TEMP 可能指向别的用户）
+    // exe 同目录/DiskOrganizer.log（便携式，随 exe 走，便于直接查看）
     static const QString path = [] {
-        const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString base = QCoreApplication::applicationDirPath();
         QDir().mkpath(base);
         return base + QStringLiteral("/DiskOrganizer.log");
     }();
