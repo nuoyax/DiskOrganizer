@@ -96,7 +96,8 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
         const QString root = rootPaths.first();
         LOG << "scanBlocking root=" << root
               << " minFile=" << minFileSizeBytes << " minDir=" << minDirTotalBytes;
-        if ((root.length() == 2 || root.length() == 3) && root[1] == QLatin1Char(':')) {
+        if (root.length() >= 2 && root[1] == QLatin1Char(':')
+            && root[0].isLetter()) {
             DiskOrganizer::UsnJournalReader usn;
             if (usn.open(root[0].toLatin1())) {
                 LOG << "USN volume opened, trying MFT direct read";
