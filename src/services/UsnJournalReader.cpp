@@ -266,12 +266,15 @@ bool applyFixup(BYTE* rec, DWORD recSize) {
 
 } // namespace
 
-bool UsnJournalReader::enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord) {
+bool UsnJournalReader::enumerateAllWithMeta(
+    const std::function<bool(const Record&)>& onRecord, quint64 minFileSize) {
     if (m_volume == INVALID_HANDLE_VALUE || !onRecord) return false;
 
     MftLayout layout;
     if (!getMftLayout(m_volume, layout)) return false;
 
+    // 大文件场景加速：小于阈值的文件不建 Node（省 QString 分配 + QHash 存储），
+    // 拼路径阶段也不必再跳过它们。目录必须保留（父链回溯需要）。
     struct Node {
         quint64 parent = 0;
         QString name;
@@ -323,6 +326,7 @@ bool UsnJournalReader::enumerateAllWithMeta(const std::function<bool(const Recor
             Node n;
             n.frn = base + i;
             n.isDir = (h->flags & 0x02) != 0;
+            bool skipRecord = false;
 
             // 遍历 resident 属性找 $FILE_NAME (0x30)
             DWORD off = h->attributeOffset;
@@ -332,11 +336,16 @@ bool UsnJournalReader::enumerateAllWithMeta(const std::function<bool(const Recor
                 if (attr->type == 0x30 && !attr->nonResident
                     && off + attr->length <= recSize
                     && attr->length >= sizeof(AttributeHeader) + sizeof(FileNameAttribute)) {
-                    auto* fn = reinterpret_cast<FileNameAttribute*>(rec + off
-                        + reinterpret_cast<AttributeHeader*>(rec + off)->nameOffset * 0 + 0); // resident value 紧随 header(0x18)
-                    // resident 属性 value 起始 = 属性头 0x18 字节（ resident 无 name 时 ）
-                    fn = reinterpret_cast<FileNameAttribute*>(rec + off + 0x18);
+                    // resident 属性 value 起始 = 属性头 0x18 字节
+                    auto* fn = reinterpret_cast<FileNameAttribute*>(rec + off + 0x18);
                     if (fn->nameNamespace != 2 /*POSIX 保留*/) {
+                        // 提前剪枝：小文件不建 Node，直接跳过该记录
+                        // （目录除外——父链回溯需要全部目录）
+                        if (!n.isDir && minFileSize > 0
+                            && fn->realSize < minFileSize) {
+                            skipRecord = true;
+                            break;
+                        }
                         n.parent = fn->parentDirectory & 0x0000FFFFFFFFFFFFULL;
                         n.size = fn->realSize;
                         n.mtimeMs = fileTimeToEpochMs(fn->modificationTime.QuadPart);
@@ -351,6 +360,7 @@ bool UsnJournalReader::enumerateAllWithMeta(const std::function<bool(const Recor
                 }
                 off += attr->length;
             }
+            if (skipRecord) continue;
             if (n.name.isEmpty()) continue;
             nodes.insert(n.frn, std::move(n));
         }

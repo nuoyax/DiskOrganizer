@@ -2,16 +2,29 @@
 
 Qt6 / C++17 / MSVC /MT 全静态单文件，兼容 Windows 8+。
 
+![概览页](docs/screenshots/overview.png)
+
 ## 核心功能
 
 | 模块 | 说明 |
 |------|------|
 | 概览 | 磁盘饼图 + 空间柱状图 + 磁盘信息表 |
 | 垃圾清理 | 12 类常见垃圾（临时文件/缓存/回收站等），复选框勾选、实时占比图 |
+
+![垃圾清理](docs/screenshots/clean.png)
 | 重复文件 | 按大小预筛 + 哈希精确比对 |
-| 大文件 | 按磁盘/大小阈值/扩展名组扫描，12 类型组可搜索下拉 |
+
+![重复文件](docs/screenshots/duplicate.png)
+| 大文件 | 按磁盘/大小阈值/扩展名组扫描，12 类型组可搜索下拉；小文件/小目录自动剪枝提速 |
+
+![大文件](docs/screenshots/bigfile.png)
+
 | 空间分析 | 目录树占比、彩色矩形图 |
 | 碎片整理 | 机械盘 defrag / SSD TRIM 优化 |
+
+![碎片整理](docs/screenshots/defrag.png)
+
+![空间分析](docs/screenshots/analyzer.png)
 
 ## 扫描加速架构（三层）
 
@@ -19,7 +32,7 @@ Qt6 / C++17 / MSVC /MT 全静态单文件，兼容 Windows 8+。
 2. **多线程并行遍历**（回退路径）：一级子目录分片 + `QtConcurrent::blockingMapped`，每核一线程，原子进度计数，取消即时生效。
 3. **大文件过滤加速**：分块并行过滤 + `std::nth_element` TopN（O(n) 选择）。
 
-> 已知限制：USN/MFT 枚举记录本身不含文件大小与修改时间（在 MFT `$FILE_NAME` 属性中），需要大小的场景（如大文件页）自动走并行遍历路径。
+> 注：整卷扫描优先直读原始 $MFT 解析 `$FILE_NAME` 属性，**可同时拿到文件大小与修改时间**；失败时退到纯 USN 枚举（不含 size/mtime），最后才回退并行遍历。
 
 ## 构建
 

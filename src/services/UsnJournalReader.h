@@ -37,8 +37,11 @@ public:
 
     // 增强版：直接读取原始 $MFT 解析 $FILE_NAME 属性，
     // Record 同时带 size 与 lastModifiedMs（USN 记录本身不含这些字段）。
-    // 仍会拼路径；失败返回 false（调用方可回退 enumerateAll 或目录遍历）。
-    bool enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord);
+    // minFileSize > 0 时，小于该字节数的文件在解析阶段即被跳过
+    // （不建节点、不拼路径），大文件扫描可大幅提速并降低内存占用；
+    // 目录始终保留（路径回溯需要）。失败返回 false（调用方可回退）。
+    bool enumerateAllWithMeta(const std::function<bool(const Record&)>& onRecord,
+                              quint64 minFileSize = 0);
 
     static bool isNtfs(wchar_t driveLetter);
 

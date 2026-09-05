@@ -2,16 +2,32 @@
 
 Qt6 / C++17 / MSVC /MT fully-static single executable, Windows 8+.
 
+![Overview](docs/screenshots/overview.png)
+
 ## Features
 
 | Module | Description |
 |--------|-------------|
 | Overview | Disk pie chart + space bar chart + drive info table |
 | Junk Clean | 12 junk categories (temp files / caches / recycle bin…), checkboxes, live pie chart |
+
+![Junk Clean](docs/screenshots/clean.png)
+
 | Duplicates | Size pre-filter + exact hash comparison |
-| Big Files | Scan by drive / size threshold / extension group; searchable combo with 12 file-type groups |
+
+![Duplicates](docs/screenshots/duplicate.png)
+
+| Big Files | Scan by drive / size threshold / extension group; searchable combo with 12 file-type groups; small files & small dirs pruned for speed |
+
+![Big Files](docs/screenshots/bigfile.png)
+
 | Space Analyzer | Directory tree breakdown, colored treemap |
+
+![Space Analyzer](docs/screenshots/analyzer.png)
+
 | Defrag | HDD defrag / SSD TRIM optimize |
+
+![Defrag](docs/screenshots/defrag.png)
 
 ## Scan Acceleration Architecture (3 tiers)
 
@@ -19,7 +35,7 @@ Qt6 / C++17 / MSVC /MT fully-static single executable, Windows 8+.
 2. **Multi-threaded parallel traversal** (fallback): first-level subdirectories sharded + `QtConcurrent::blockingMapped`, one thread per core, atomic progress counters, instant cancellation.
 3. **Big-file filter acceleration**: chunked parallel filtering + `std::nth_element` TopN selection (O(n)).
 
-> Known limitation: USN/MFT enumeration records do not carry file size or modification time (those live in the MFT `$FILE_NAME` attribute); size-dependent features (e.g. Big Files page) automatically use the parallel-traversal path.
+> Note: whole-volume scans read the raw $MFT and parse the `$FILE_NAME` attribute first, **providing both file size and modification time**; on failure it falls back to pure USN enumeration (no size/mtime), then to parallel traversal.
 
 ## Build
 

@@ -215,14 +215,18 @@ void BigFilePage::doScan() {
             return true;
         };
         QList<FileInfo> all;
+        // 提速剪枝：按用户设置的大小阈值跳过小文件；
+        // 总大小低于阈值×2 的小目录整体跳过（零碎文件不值得遍历）
+        const qint64 minFile = filter.minSizeBytes;
+        const qint64 minDir = qMax<qint64>(minFile * 2, 16LL * 1024 * 1024);
         if (targetDrive.isEmpty()) {
             for (const auto& d : enumerateDisks()) {
                 if (cancelled()) break;
                 if (d.driveLetter.startsWith("A:") || d.driveLetter.startsWith("B:")) continue;
-                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress);
+                all += scanner.scanBlocking(QStringList{d.driveLetter + "/"}, onProgress, minFile, minDir);
             }
         } else {
-            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress);
+            all = scanner.scanBlocking(QStringList{targetDrive + "/"}, onProgress, minFile, minDir);
         }
         if (cancelled()) return QList<FileInfo>();
         BigFileFinder finder;

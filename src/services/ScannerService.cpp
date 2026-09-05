@@ -14,6 +14,20 @@ std::atomic<int> g_activeScans{0};
 
 ScannerService::ScannerService(QObject* parent) : QObject(parent) {}
 
+namespace {
+// 快速聚合目录总大小（文件数多时用 QDirIterator 顺序遍历，不做任何分配）。
+// 仅用于剪枝判断：小目录（总大小低于阈值）可整体跳过。
+qint64 dirTotalSize(const QString& dir) {
+    qint64 total = 0;
+    QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        total += it.fileInfo().size();
+    }
+    return total;
+}
+} // namespace
+
 void ScannerService::startScan(const QStringList& rootPaths) {
     g_cancelRequested = false;
     ++g_activeScans;
@@ -68,7 +82,8 @@ void ScannerService::startScan(const QStringList& rootPaths) {
 }
 
 QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
-    const std::function<bool(qint64, const QString&)>& onProgress) {
+    const std::function<bool(qint64, const QString&)>& onProgress,
+    qint64 minFileSizeBytes, qint64 minDirTotalBytes) {
     // 快速路径：整卷扫描 + NTFS + 有权限 → 直接枚举 USN/MFT（秒级），
     // 失败则回退到并行目录树遍历。
     if (rootPaths.size() == 1) {
@@ -80,6 +95,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 out.reserve(200000);
                 qint64 count = 0;
                 // 优先带元数据版本（size/mtime 来自 MFT $FILE_NAME），
+                // 大小阈值在 MFT 解析阶段剪枝（小文件不建节点/拼路径）。
                 // 失败再退到纯 USN 枚举，最后才回退目录遍历。
                 bool ok = usn.enumerateAllWithMeta([&](const DiskOrganizer::UsnJournalReader::Record& r) {
                     FileInfo info;
@@ -96,7 +112,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                         && !onProgress(count, r.path))
                         return false;
                     return true;
-                });
+                }, quint64(minFileSizeBytes));
                 if (ok && !out.isEmpty()) return out;
                 // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
                 ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
@@ -123,6 +139,8 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
 
     // 并行扫描：先把各根目录展开成一级子目录分片，再 blockingMapped 多线程遍历。
     // 磁盘根目录的一级子目录往往分布在不同目录树分支，并行度好。
+    // 大文件扫描加速：先快速聚合每个一级子目录的总大小，
+    // 低于 minDirTotalBytes 的整个目录（含零碎小文件）直接剪掉，不再遍历。
     QStringList shards;
     for (const QString& root : rootPaths) {
         if (!QFileInfo::exists(root)) continue;
@@ -130,8 +148,13 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
         if (subDirs.isEmpty()) {
             shards << root;
         } else {
-            for (const QString& sub : subDirs)
-                shards << root + QLatin1Char('/') + sub;
+            const bool prune = minDirTotalBytes > 0;
+            for (const QString& sub : subDirs) {
+                const QString fullPath = root + QLatin1Char('/') + sub;
+                if (prune && dirTotalSize(fullPath) < minDirTotalBytes)
+                    continue; // 小目录整体跳过
+                shards << fullPath;
+            }
             shards << root;   // 根层散文件
         }
     }
@@ -139,8 +162,9 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     QAtomicInteger<qint64> scannedCount{0};
     QAtomicInteger<bool> cancelled{false};
 
+    const qint64 minFile = minFileSizeBytes;
     auto results = QtConcurrent::blockingMapped(shards,
-        [this, &cancelled, &scannedCount, &onProgress](const QString& shard) -> QList<FileInfo> {
+        [this, &cancelled, &scannedCount, &onProgress, minFile](const QString& shard) -> QList<FileInfo> {
             QList<FileInfo> local;
             local.reserve(1024);
             QDirIterator it(shard, QDir::Files | QDir::NoDotAndDotDot,
@@ -151,6 +175,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 it.next();
                 const QFileInfo fi = it.fileInfo();
                 if (!fi.exists()) continue;
+                if (minFile > 0 && fi.size() < minFile) continue; // 小文件跳过
                 FileInfo info;
                 info.absolutePath = fi.absoluteFilePath();
                 info.name = fi.fileName();
