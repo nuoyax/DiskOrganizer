@@ -296,7 +296,7 @@ void BigFilePage::doScan() {
     const QStringList exts = m_extCombo->currentData().toString()
                                  .split(' ', Qt::SkipEmptyParts);
     if (!exts.isEmpty()) filter.extensionFilter = exts;
-    filter.topN = 500;
+    filter.topN = 100000; // 与分页配合：全量保留，不再截断 top 500
 
     // 取消令牌：扫描中再点按钮即置位
     m_scanCancelled.store(false);
