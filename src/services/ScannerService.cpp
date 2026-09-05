@@ -124,7 +124,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                     return true;
                 }, quint64(minFileSizeBytes), cancelledFn);
                 LOG << "enumerateAllWithMeta ok=" << ok << " records=" << out.size();
-                if (ok && !out.isEmpty()) return out;
+                if (ok) return out; // 成功即返回（含 0 条 = 阈值下无匹配文件，属正常结果）
                 // enumerateAllWithMeta 失败 → 退到纯 USN 枚举（无 size）
                 if (cancelledFn && cancelledFn()) return {};
                 ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
@@ -145,7 +145,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                     return true;
                 }, cancelledFn);
                 LOG << "enumerateAll(plain) ok=" << ok << " records=" << out.size();
-                if (ok && !out.isEmpty()) return out;
+                if (ok) return out;
                 // 失败（权限/日志缺失/取消）→ 回退遍历；已取消则直接返回
                 if (cancelledFn && cancelledFn()) return {};
             }
