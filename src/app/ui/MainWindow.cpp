@@ -198,7 +198,15 @@ void MainWindow::refreshDisks() {
         setItem(2, d.fileSystem);
         setItem(3, formatSize(d.totalBytes));
         setItem(4, formatSize(d.freeBytes));
-        setItem(5, QString::number(d.usedRatio() * 100, 'f', 1) + '%');
+        // 使用率：<70% 绿、70-90% 黄、>90% 红（含圆点色块）
+        const double ratio = d.usedRatio();
+        const QColor dotColor = ratio > 0.9 ? QColor("#D93026")
+                              : ratio > 0.7 ? QColor("#E8A13A")
+                                            : QColor("#2E9E5B");
+        auto* usageItem = new QTableWidgetItem(
+            QString::fromUtf8("\xE2\x97\x8F ") + QString::number(ratio * 100, 'f', 1) + '%');
+        usageItem->setForeground(dotColor);
+        m_diskTable->setItem(5, usageItem);
     }
 
     // 图表：各磁盘 已用/可用
