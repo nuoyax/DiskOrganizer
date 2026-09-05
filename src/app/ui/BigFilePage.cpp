@@ -67,6 +67,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     // 大小阈值：预设下拉（可搜索复用），单位 MB；起步 100MB（大文件定位场景）
     m_sizeCombo = new SearchableComboBox;
     m_sizeCombo->setFixedWidth(150);
+    m_sizeCombo->setToolTip(tr("只显示大于该大小的文件"));
     m_sizeCombo->addItem("100 MB", 100);
     m_sizeCombo->addItem("500 MB", 500);
     m_sizeCombo->addItem("1 GB", 1024);
@@ -125,7 +126,9 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     filterRow->addWidget(new QLabel(tr("磁盘:")));
     filterRow->addWidget(m_driveCombo);
     filterRow->addWidget(m_dirEdit);
-    filterRow->addWidget(new QLabel(tr("大小:")));
+    auto* sizeLabel = new QLabel(tr("文件大小 >"));
+    sizeLabel->setToolTip(tr("只显示大于该大小的文件"));
+    filterRow->addWidget(sizeLabel);
     filterRow->addWidget(m_sizeCombo);
     filterRow->addWidget(new QLabel(tr("类型:")));
     filterRow->addWidget(m_extCombo);
