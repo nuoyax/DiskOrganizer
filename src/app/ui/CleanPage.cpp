@@ -1,5 +1,6 @@
 #include "CleanPage.h"
 #include "Charts.h"
+#include "Icons.h"
 #include "util/SizeFormatter.h"
 #include "SettingsDialog.h"
 #include <QCheckBox>
@@ -74,8 +75,8 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     m_progress->setTextVisible(false);
 
     auto* btnRow = new QHBoxLayout;
-    m_scanBtn = new QPushButton(tr("开始扫描"));
-    m_cleanBtn = new QPushButton(tr("清理选中项"));
+    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"));
+    m_cleanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::broom), QColor("white")), tr("清理选中项"));
     m_cleanBtn->setProperty("class", "secondary");
     m_cleanBtn->setEnabled(false);
     auto* recycle = new QCheckBox(tr("删除到回收站"));

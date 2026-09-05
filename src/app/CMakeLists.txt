@@ -5,6 +5,7 @@ qt_add_executable(DiskOrganizer
     ui/MainWindow.cpp
     ui/PageBase.h
     ui/FlatStyle.h
+    ui/Icons.h
     ui/Charts.h
     ui/Charts.cpp
     ui/CleanPage.h
@@ -27,6 +28,7 @@ target_link_libraries(DiskOrganizer PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Concurrent
+    Qt6::Svg
 )
 
 set_target_properties(DiskOrganizer PROPERTIES

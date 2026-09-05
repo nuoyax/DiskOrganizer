@@ -1,4 +1,5 @@
 #include "BigFilePage.h"
+#include "Icons.h"
 #include "util/FileSystemUtil.h"
 #include "util/SizeFormatter.h"
 #include "services/ScannerService.h"
@@ -68,8 +69,8 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     filterRow->addWidget(m_groupByDrive);
     filterRow->addStretch();
 
-    m_scanBtn = new QPushButton(tr("开始扫描"));
-    m_deleteBtn = new QPushButton(tr("删除选中文件"));
+    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"));
+    m_deleteBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")), tr("删除选中文件"));
     m_deleteBtn->setProperty("class", "danger");
     m_deleteBtn->setEnabled(false);
     filterRow->addWidget(m_scanBtn);

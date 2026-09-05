@@ -1,7 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QTableWidget>
-#include <QTabWidget>
+#include <QStackedWidget>
 
 namespace DiskOrganizer {
 
@@ -25,8 +25,9 @@ private slots:
 private:
     void buildUi();
     void buildMenus();
+    QWidget* buildOverviewPage();
 
-    QTabWidget* m_tabs = nullptr;
+    QStackedWidget* m_stack = nullptr;
     QTableWidget* m_diskTable = nullptr;
     PieChart* m_diskPie = nullptr;
     BarChart* m_diskBar = nullptr;

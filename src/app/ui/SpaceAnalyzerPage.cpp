@@ -1,3 +1,4 @@
+#include "Icons.h"
 #include "SpaceAnalyzerPage.h"
 #include <QDir>
 #include <QFileDialog>
@@ -23,12 +24,12 @@ SpaceAnalyzerPage::SpaceAnalyzerPage(QWidget* parent) : PageBase(parent) {
 
     auto* top = new QHBoxLayout;
     m_pathEdit = new QLineEdit(QDir::rootPath(), this);
-    auto* browse = new QPushButton(tr("浏览…"), this);
+    auto* browse = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::folder), QColor("white")), tr("浏览…"), this);
     connect(browse, &QPushButton::clicked, this, [this] {
         const QString dir = QFileDialog::getExistingDirectory(this, tr("选择目录"), m_pathEdit->text());
         if (!dir.isEmpty()) { m_pathEdit->setText(dir); scanPath(dir); }
     });
-    m_scanBtn = new QPushButton(tr("开始扫描"), this);
+    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"), this);
     connect(m_scanBtn, &QPushButton::clicked, this, [this] { scanPath(m_pathEdit->text()); });
     top->addWidget(new QLabel(tr("路径："), this));
     top->addWidget(m_pathEdit, 1);

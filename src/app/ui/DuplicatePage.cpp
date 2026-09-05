@@ -1,3 +1,4 @@
+#include "Icons.h"
 #include "DuplicatePage.h"
 #include <QDateTime>
 #include <QDir>
@@ -24,12 +25,12 @@ DuplicatePage::DuplicatePage(QWidget* parent) : PageBase(parent) {
 
     auto* top = new QHBoxLayout;
     m_pathEdit = new QLineEdit(QDir::homePath(), this);
-    auto* browse = new QPushButton(tr("浏览…"), this);
+    auto* browse = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::folder), QColor("white")), tr("浏览…"), this);
     connect(browse, &QPushButton::clicked, this, [this] {
         const QString dir = QFileDialog::getExistingDirectory(this, tr("选择目录"), m_pathEdit->text());
         if (!dir.isEmpty()) m_pathEdit->setText(dir);
     });
-    m_findBtn = new QPushButton(tr("查找重复"), this);
+    m_findBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("查找重复"), this);
     top->addWidget(new QLabel(tr("目录："), this));
     top->addWidget(m_pathEdit, 1);
     top->addWidget(browse);
@@ -45,9 +46,9 @@ DuplicatePage::DuplicatePage(QWidget* parent) : PageBase(parent) {
     layout->addWidget(m_list);
 
     auto* bottom = new QHBoxLayout;
-    m_keepBtn = new QPushButton(tr("保留每组最早修改的"), this);
+    m_keepBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::check), QColor(0x2F,0x6F,0xED)), tr("保留每组最早修改的"), this);
     m_keepBtn->setEnabled(false);
-    m_deleteBtn = new QPushButton(tr("删除选中（回收站）"), this);
+    m_deleteBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")), tr("删除选中（回收站）"), this);
     m_deleteBtn->setEnabled(false);
     bottom->addWidget(m_keepBtn);
     bottom->addWidget(m_deleteBtn);

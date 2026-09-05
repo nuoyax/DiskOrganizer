@@ -1,3 +1,4 @@
+#include "Icons.h"
 #include "DefragPage.h"
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -22,11 +23,11 @@ DefragPage::DefragPage(QWidget* parent) : PageBase(parent) {
     top->addWidget(new QLabel(tr("驱动器："), this));
     m_driveBox = new QComboBox(this);
     top->addWidget(m_driveBox);
-    auto* refreshBtn = new QPushButton(tr("刷新"), this);
+    auto* refreshBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::refresh), QColor(0x2F,0x6F,0xED)), tr("刷新"), this);
     connect(refreshBtn, &QPushButton::clicked, this, &DefragPage::refreshDrives);
     top->addWidget(refreshBtn);
-    m_analyzeBtn = new QPushButton(tr("分析"), this);
-    m_defragBtn = new QPushButton(tr("整理/优化"), this);
+    m_analyzeBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("分析"), this);
+    m_defragBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::rocket), QColor("white")), tr("整理/优化"), this);
     top->addWidget(m_analyzeBtn);
     top->addWidget(m_defragBtn);
     top->addStretch();
