@@ -3,6 +3,8 @@
 #include <QHash>
 #include <QString>
 
+#include <future>
+#include <memory>
 #include <vector>
 
 namespace DiskOrganizer {
@@ -273,28 +275,9 @@ bool UsnJournalReader::enumerateAllWithMeta(
     MftLayout layout;
     if (!getMftLayout(m_volume, layout)) return false;
 
-    // 大文件场景加速（WizTree 直读 $MFT 同款路线），三个关键点：
-    // 1) 小于阈值的文件在解析阶段直接丢弃，不进索引、不拼路径；
-    // 2) 紧凑 vector 节点 + UTF-16 名字竞技场（arena），解析期零 QString 分配；
-    // 3) 只为候选大文件的祖先目录按需拼路径并缓存（不再全卷目录预拼）。
-    struct Node {
-        quint64 parent = 0;   // 父 FRN（低 6 字节）
-        quint64 frn = 0;
-        quint64 size = 0;
-        qint64 mtimeMs = 0;
-        quint32 nameOff = 0;  // arena 内 UTF-16 字节偏移
-        quint32 nameLen = 0;  // 字符数
-        bool isDir = false;
-    };
-    std::vector<Node> nodes;
-    nodes.reserve(1 << 16);
-    QHash<quint64, quint32> indexOf; // FRN -> nodes 下标
-    indexOf.reserve(1 << 18);
-    QByteArray arena;                // 保留节点的 UTF-16 名字（无对齐要求）
-    arena.reserve(1 << 20);
-
-    // 分块顺序读 MFT。MFT 可能很大（百万文件≈1GB），按 8MB 块读。
-    // 记录不会跨块边界：块大小取记录大小的整数倍，一次定点读整块。
+    // 流水线读取 + 多线程解析（WizTree/Everything 同款思路）：
+    // 记录之间完全独立，按块切分后并行解析；读下一块与解析当前块重叠，
+    // I/O 与多核都不空转。每块独立 arena，合并时统一加偏移。
     const DWORDLONG recSize = layout.bytesPerRecord;
     NTFS_VOLUME_DATA_BUFFER vd = {};
     DWORD ret = 0;
@@ -304,31 +287,37 @@ bool UsnJournalReader::enumerateAllWithMeta(
         && vd.MftValidDataLength.QuadPart > 0)
         totalRecords = vd.MftValidDataLength.QuadPart / recSize;
 
-    const DWORD kChunkRecords = 2048;
-    std::vector<BYTE> chunk(size_t(recSize * kChunkRecords));
+    struct Node {
+        quint64 parent = 0;   // 父 FRN（低 6 字节）
+        quint64 frn = 0;
+        quint64 size = 0;
+        qint64 mtimeMs = 0;
+        quint32 nameOff = 0;  // arena 内 UTF-16 字节偏移
+        quint32 nameLen = 0;  // 字符数
+        bool isDir = false;
+    };
+    struct Parsed {
+        std::vector<Node> nodes;
+        QByteArray arena;     // 本块的 UTF-16 名字
+    };
 
-    for (DWORDLONG base = 0; base < totalRecords; base += kChunkRecords) {
-        const DWORDLONG records = qMin<DWORDLONG>(kChunkRecords, totalRecords - base);
-        OVERLAPPED ov = {};
-        const DWORDLONG fileOff = layout.mftStartOffset + base * recSize;
-        ov.Offset = DWORD(fileOff & 0xFFFFFFFF);
-        ov.OffsetHigh = DWORD(fileOff >> 32);
-        DWORD got = 0;
-        if (!ReadFile(m_volume, chunk.data(), DWORD(records * recSize), &got, &ov)
-            && GetLastError() == ERROR_IO_PENDING
-            && !GetOverlappedResult(m_volume, &ov, &got, TRUE))
-            break; // 读失败 → 已解析部分仍可用
-        if (got < recSize) break;
+    const DWORD kChunkRecords = 4096; // 4MB/块（1KB 记录）
+    const int kMaxInflight = 4;       // 预取块数上限（读领先解析的深度）
 
-        for (DWORDLONG i = 0; i < got / recSize; ++i) {
-            BYTE* rec = chunk.data() + size_t(i * recSize);
+    auto parseChunk = [recSize, minFileSize](const std::vector<BYTE>& buf,
+                                             quint64 frnBase, DWORD records) -> Parsed {
+        Parsed p;
+        p.nodes.reserve(records / 2);
+        p.arena.reserve(1 << 18);
+        for (DWORD i = 0; i < records; ++i) {
+            BYTE* rec = const_cast<BYTE*>(buf.data()) + size_t(i) * size_t(recSize);
             auto* h = reinterpret_cast<MftRecordHeader*>(rec);
             if (h->magic != 0x454C4946) continue;
             if (!applyFixup(rec, DWORD(recSize))) continue;
             if (!(h->flags & 0x01)) continue; // 未使用记录跳过
 
             Node n;
-            n.frn = base + i;
+            n.frn = frnBase + i;
             n.isDir = (h->flags & 0x02) != 0;
             bool skipRecord = false;
 
@@ -357,10 +346,10 @@ bool UsnJournalReader::enumerateAllWithMeta(
                         const BYTE* namePtr = rec + off + 0x18 + sizeof(FileNameAttribute);
                         if (nameLen > 0 && off + 0x18 + sizeof(FileNameAttribute)
                                 + size_t(nameLen) * 2 <= recSize) {
-                            n.nameOff = quint32(arena.size());
+                            n.nameOff = quint32(p.arena.size());
                             n.nameLen = nameLen;
-                            arena.append(reinterpret_cast<const char*>(namePtr),
-                                         size_t(nameLen) * 2);
+                            p.arena.append(reinterpret_cast<const char*>(namePtr),
+                                           size_t(nameLen) * 2);
                         }
                     }
                     break; // 取第一个 $FILE_NAME（还有一个 win32/正名即可）
@@ -369,9 +358,68 @@ bool UsnJournalReader::enumerateAllWithMeta(
             }
             if (skipRecord) continue;
             if (n.nameLen == 0) continue;
-            indexOf.insert(n.frn, quint32(nodes.size()));
-            nodes.push_back(n);
+            p.nodes.push_back(n);
         }
+        return p;
+    };
+
+    // 定点读一块 MFT（记录不跨块边界，块大小为记录整数倍）
+    auto readChunk = [&](std::vector<BYTE>& buf, quint64 base) -> DWORD {
+        const DWORDLONG records = qMin<DWORDLONG>(kChunkRecords, totalRecords - base);
+        OVERLAPPED ov = {};
+        const DWORDLONG fileOff = layout.mftStartOffset + base * recSize;
+        ov.Offset = DWORD(fileOff & 0xFFFFFFFF);
+        ov.OffsetHigh = DWORD(fileOff >> 32);
+        DWORD got = 0;
+        if (!ReadFile(m_volume, buf.data(), DWORD(records * recSize), &got, &ov)
+            && GetLastError() == ERROR_IO_PENDING
+            && !GetOverlappedResult(m_volume, &ov, &got, TRUE))
+            return 0; // 读失败 → 视为到达末尾
+        return got / DWORD(recSize);
+    };
+
+    std::vector<Node> nodes;
+    nodes.reserve(1 << 18);
+    std::vector<std::future<Parsed>> inflight; // 有序：下标即块序号
+    std::vector<std::unique_ptr<std::vector<BYTE>>> bufs;
+    quint64 nextBase = 0;
+    int nextToParse = 0; // 待合并的块序
+
+    // 预取 + 提交解析，直到读失败/读完
+    while (nextBase < totalRecords) {
+        // 限制在途块数，避免内存无限增长
+        if (int(inflight.size()) - nextToParse >= kMaxInflight) {
+            inflight[nextToParse].wait();
+            ++nextToParse;
+        }
+        auto buf = std::make_unique<std::vector<BYTE>>(size_t(recSize * kChunkRecords));
+        const DWORD records = readChunk(*buf, nextBase);
+        if (records == 0) break;
+        auto* raw = buf.release();
+        bufs.emplace_back(raw);
+        inflight.push_back(std::async(std::launch::async, parseChunk,
+                                      std::cref(*raw), nextBase, records));
+        nextBase += records;
+    }
+
+    // 按序合并：FRN→下标索引 + 名字 arena 偏移平移
+    QHash<quint64, quint32> indexOf; // FRN -> nodes 下标
+    indexOf.reserve(1 << 18);
+    QByteArray arena;
+    arena.reserve(1 << 22);
+    (void)nextToParse;
+    for (int c = 0; c < int(inflight.size()); ++c) {
+        Parsed p = inflight[c].get();
+        const quint32 arenaBase = quint32(arena.size());
+        if (arenaBase)
+            for (auto& n : p.nodes) n.nameOff += arenaBase;
+        arena.append(p.arena);
+        const quint32 idxBase = quint32(nodes.size());
+        for (auto& n : p.nodes) {
+            indexOf.insert(n.frn, idxBase + quint32(nodes.size()));
+            nodes.push_back(std::move(n));
+        }
+        bufs[c].reset(); // 释放该块原始缓冲
     }
 
     if (nodes.empty()) return false;
