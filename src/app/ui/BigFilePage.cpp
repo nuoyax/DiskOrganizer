@@ -115,6 +115,23 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     filterRow->addWidget(m_deleteBtn);
     root->addLayout(filterRow);
 
+    // 进度条 + 状态行：放在表格上方（过滤行与结果表之间）
+    auto* progressRow = new QHBoxLayout;
+    m_progress = new QProgressBar;
+    m_progress->setFixedHeight(10);
+    m_progress->setTextVisible(false);
+    m_progress->setFixedWidth(180);
+    m_summary = new QLabel(tr("尚未扫描"));
+    m_summary->setStyleSheet("color:#636E88; background:transparent;");
+    // 关键：长路径不改变布局宽度，超出即省略号
+    m_summary->setMinimumWidth(0);
+    m_summary->setMaximumWidth(QWIDGETSIZE_MAX);
+    m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    progressRow->addWidget(m_progress);
+    progressRow->addWidget(m_summary, 1);
+    root->addLayout(progressRow);
+
     // 结果表（可自由排序）
     m_table = new QTableWidget(0, 5);
     m_table->setHorizontalHeaderLabels({tr("磁盘"), tr("大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
@@ -127,17 +144,6 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_table->setAlternatingRowColors(true);
     m_table->verticalHeader()->setVisible(false);
     root->addWidget(m_table, 1);
-
-    // 底部
-    m_progress = new QProgressBar;
-    m_progress->setFixedHeight(10);
-    m_progress->setTextVisible(false);
-    m_summary = new QLabel(tr("尚未扫描"));
-    m_summary->setStyleSheet("color:#636E88; background:transparent;");
-    auto* bottom = new QHBoxLayout;
-    bottom->addWidget(m_progress, 1);
-    bottom->addWidget(m_summary);
-    root->addLayout(bottom);
 
     connect(m_scanBtn, &QPushButton::clicked, this, &BigFilePage::doScan);
     connect(m_deleteBtn, &QPushButton::clicked, this, &BigFilePage::doDelete);
@@ -181,7 +187,12 @@ void BigFilePage::doScan() {
             [this, cancelled](qint64 n, const QString& path) -> bool {
             if (cancelled()) return false;
             QMetaObject::invokeMethod(this, [this, n, path]() {
-                m_summary->setText(tr("已扫描 %1 个文件  %2").arg(n).arg(path));
+                // elided：长路径省略号，避免撑宽窗口
+                const QString elided = fontMetrics().elidedText(
+                    tr("已扫描 %1 个文件  %2").arg(n).arg(path),
+                    Qt::ElideMiddle, m_summary->width());
+                m_summary->setText(elided);
+                m_summary->setToolTip(path);
             }, Qt::QueuedConnection);
             return true;
         };
