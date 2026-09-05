@@ -1,4 +1,5 @@
 #include "services/ScannerService.h"
+#include "services/UsnJournalReader.h"
 #include <QDir>
 #include <QDirIterator>
 #include <QDateTime>
@@ -68,6 +69,38 @@ void ScannerService::startScan(const QStringList& rootPaths) {
 
 QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
     const std::function<bool(qint64, const QString&)>& onProgress) {
+    // 快速路径：整卷扫描 + NTFS + 有权限 → 直接枚举 USN/MFT（秒级），
+    // 失败则回退到并行目录树遍历。
+    if (rootPaths.size() == 1) {
+        const QString root = rootPaths.first();
+        if ((root.length() == 2 || root.length() == 3) && root[1] == QLatin1Char(':')) {
+            DiskOrganizer::UsnJournalReader usn;
+            if (usn.open(root[0].toLatin1())) {
+                QList<FileInfo> out;
+                out.reserve(200000);
+                qint64 count = 0;
+                const bool ok = usn.enumerateAll([&](const DiskOrganizer::UsnJournalReader::Record& r) {
+                    FileInfo info;
+                    info.absolutePath = r.path;
+                    info.name = r.path.section(QLatin1Char('/'), -1);
+                    info.isDir = r.isDirectory;
+                    info.isSymlink = false;
+                    info.size = r.size;
+                    info.extension = info.name.contains(QLatin1Char('.'))
+                        ? QLatin1Char('.') + info.name.section(QLatin1Char('.'), -1).toLower()
+                        : QString();
+                    out.append(info);
+                    if (onProgress && (++count % 4096 == 0)
+                        && !onProgress(count, r.path))
+                        return false;
+                    return true;
+                });
+                if (ok && !out.isEmpty()) return out;
+                // 失败（权限/日志缺失）→ 回退遍历
+            }
+        }
+    }
+
     // 并行扫描：先把各根目录展开成一级子目录分片，再 blockingMapped 多线程遍历。
     // 磁盘根目录的一级子目录往往分布在不同目录树分支，并行度好。
     QStringList shards;

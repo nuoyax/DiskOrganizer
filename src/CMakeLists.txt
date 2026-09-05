@@ -4,6 +4,8 @@ qt_add_library(diskorganizer_core STATIC
     models/DiskItem.h
     services/ScannerService.h
     services/ScannerService.cpp
+    services/UsnJournalReader.h
+    services/UsnJournalReader.cpp
     services/CleanerService.h
     services/CleanerService.cpp
     services/DuplicateFinder.h
