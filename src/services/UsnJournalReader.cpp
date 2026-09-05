@@ -273,50 +273,54 @@ bool UsnJournalReader::enumerateAllWithMeta(
     MftLayout layout;
     if (!getMftLayout(m_volume, layout)) return false;
 
-    // 大文件场景加速：小于阈值的文件不建 Node（省 QString 分配 + QHash 存储），
-    // 拼路径阶段也不必再跳过它们。目录必须保留（父链回溯需要）。
+    // 大文件场景加速（WizTree 直读 $MFT 同款路线），三个关键点：
+    // 1) 小于阈值的文件在解析阶段直接丢弃，不进索引、不拼路径；
+    // 2) 紧凑 vector 节点 + UTF-16 名字竞技场（arena），解析期零 QString 分配；
+    // 3) 只为候选大文件的祖先目录按需拼路径并缓存（不再全卷目录预拼）。
     struct Node {
-        quint64 parent = 0;
-        QString name;
-        bool isDir = false;
+        quint64 parent = 0;   // 父 FRN（低 6 字节）
+        quint64 frn = 0;
         quint64 size = 0;
         qint64 mtimeMs = 0;
-        quint64 frn = 0;
+        quint32 nameOff = 0;  // arena 内 UTF-16 字节偏移
+        quint32 nameLen = 0;  // 字符数
+        bool isDir = false;
     };
-    QHash<quint64, Node> nodes;
-    nodes.reserve(200000);
+    std::vector<Node> nodes;
+    nodes.reserve(1 << 16);
+    QHash<quint64, quint32> indexOf; // FRN -> nodes 下标
+    indexOf.reserve(1 << 18);
+    QByteArray arena;                // 保留节点的 UTF-16 名字（无对齐要求）
+    arena.reserve(1 << 20);
 
     // 分块顺序读 MFT。MFT 可能很大（百万文件≈1GB），按 8MB 块读。
-    // 记录可能跨块边界，逐条定位读取保证不截断：用 OVERLAPPED 定点读。
+    // 记录不会跨块边界：块大小取记录大小的整数倍，一次定点读整块。
     const DWORDLONG recSize = layout.bytesPerRecord;
-    const DWORDLONG totalGuess = 1ULL << 40; // 上限保护；实际按读取失败终止
-    const DWORD kChunkRecords = 2048;
-    std::vector<BYTE> chunk(size_t(recSize * kChunkRecords));
-
-    // 先取 MFT 数据总长（用卷数据里 RecordsNumber 估算，读不到就用穷举）
     NTFS_VOLUME_DATA_BUFFER vd = {};
     DWORD ret = 0;
     DWORDLONG totalRecords = 1ULL << 30;
     if (DeviceIoControl(m_volume, FSCTL_GET_NTFS_VOLUME_DATA, nullptr, 0,
-                        &vd, sizeof(vd), &ret, nullptr) && vd.MftValidDataLength.QuadPart > 0)
+                        &vd, sizeof(vd), &ret, nullptr)
+        && vd.MftValidDataLength.QuadPart > 0)
         totalRecords = vd.MftValidDataLength.QuadPart / recSize;
+
+    const DWORD kChunkRecords = 2048;
+    std::vector<BYTE> chunk(size_t(recSize * kChunkRecords));
 
     for (DWORDLONG base = 0; base < totalRecords; base += kChunkRecords) {
         const DWORDLONG records = qMin<DWORDLONG>(kChunkRecords, totalRecords - base);
         OVERLAPPED ov = {};
-        ov.Offset = DWORD((layout.mftStartOffset + base * recSize) & 0xFFFFFFFF);
-        ov.OffsetHigh = DWORD((layout.mftStartOffset + base * recSize) >> 32);
-        if (!ReadFile(m_volume, chunk.data(), DWORD(records * recSize), nullptr, &ov)) {
-            const DWORD err = GetLastError();
-            if (err != ERROR_IO_PENDING) break;
-            DWORD got = 0;
-            if (!GetOverlappedResult(m_volume, &ov, &got, TRUE)) { CancelIo(m_volume); break; }
-        } else {
-            // 同步完成
-        }
-        CancelIo(m_volume);
+        const DWORDLONG fileOff = layout.mftStartOffset + base * recSize;
+        ov.Offset = DWORD(fileOff & 0xFFFFFFFF);
+        ov.OffsetHigh = DWORD(fileOff >> 32);
+        DWORD got = 0;
+        if (!ReadFile(m_volume, chunk.data(), DWORD(records * recSize), &got, &ov)
+            && GetLastError() == ERROR_IO_PENDING
+            && !GetOverlappedResult(m_volume, &ov, &got, TRUE))
+            break; // 读失败 → 已解析部分仍可用
+        if (got < recSize) break;
 
-        for (DWORDLONG i = 0; i < records; ++i) {
+        for (DWORDLONG i = 0; i < got / recSize; ++i) {
             BYTE* rec = chunk.data() + size_t(i * recSize);
             auto* h = reinterpret_cast<MftRecordHeader*>(rec);
             if (h->magic != 0x454C4946) continue;
@@ -350,10 +354,13 @@ bool UsnJournalReader::enumerateAllWithMeta(
                         n.size = fn->realSize;
                         n.mtimeMs = fileTimeToEpochMs(fn->modificationTime.QuadPart);
                         const WORD nameLen = fn->nameLength;
-                        if (off + 0x18 + sizeof(FileNameAttribute) + size_t(nameLen) * 2 <= recSize) {
-                            n.name = QString::fromWCharArray(
-                                reinterpret_cast<const wchar_t*>(rec + off + 0x18 + sizeof(FileNameAttribute)),
-                                nameLen);
+                        const BYTE* namePtr = rec + off + 0x18 + sizeof(FileNameAttribute);
+                        if (nameLen > 0 && off + 0x18 + sizeof(FileNameAttribute)
+                                + size_t(nameLen) * 2 <= recSize) {
+                            n.nameOff = quint32(arena.size());
+                            n.nameLen = nameLen;
+                            arena.append(reinterpret_cast<const char*>(namePtr),
+                                         size_t(nameLen) * 2);
                         }
                     }
                     break; // 取第一个 $FILE_NAME（还有一个 win32/正名即可）
@@ -361,49 +368,52 @@ bool UsnJournalReader::enumerateAllWithMeta(
                 off += attr->length;
             }
             if (skipRecord) continue;
-            if (n.name.isEmpty()) continue;
-            nodes.insert(n.frn, std::move(n));
+            if (n.nameLen == 0) continue;
+            indexOf.insert(n.frn, quint32(nodes.size()));
+            nodes.push_back(n);
         }
     }
 
-    if (nodes.isEmpty()) return false;
+    if (nodes.empty()) return false;
 
-    // 路径拼装：与 enumerateAll 相同的缓存策略
+    // 路径拼装：只为候选文件触发，沿父链向上找已缓存祖先，再逐级下拼。
+    // 目录节点不再全量预拼（百万级目录的 QString 拼接是此前的最大热点）。
+    const wchar_t* names = reinterpret_cast<const wchar_t*>(arena.constData());
     auto pathOf = [&](quint64 frn) -> QString {
-        QVector<quint64> chain;
-        QString path;
+        quint64 chain[256];
+        int depth = 0;
+        QString base; // 最近的已缓存祖先路径（可能为空 = 到卷根）
         quint64 cur = frn;
-        int guard = 0;
-        while (guard++ < 512) {
-            auto it = m_frnPathCache.find(cur);
-            if (it != m_frnPathCache.end()) { path = *it; break; }
-            auto nit = nodes.find(cur);
-            if (nit == nodes.end()) { path = QString(); break; }
-            chain.append(cur);
-            cur = nit->parent;
-            if (cur == frn) { path = QString(); break; }
+        while (true) {
+            auto cit = m_frnPathCache.constFind(cur);
+            if (cit != m_frnPathCache.constEnd()) { base = *cit; break; }
+            auto iit = indexOf.constFind(cur);
+            if (iit == indexOf.constEnd()) break; // 不在本卷 MFT 中（如卷根 5）
+            if (depth < int(sizeof(chain) / sizeof(chain[0]))) chain[depth++] = cur;
+            const Node& nd = nodes[*iit];
+            if (nd.parent == cur) break; // 环保护
+            cur = nd.parent;
         }
-        if (path.isEmpty() && !chain.isEmpty()) {
-            path = QString(QChar(m_drive)) + QStringLiteral(":");
-            for (int i = chain.size() - 1; i >= 0; --i) {
-                auto nit = nodes.find(chain[i]);
-                if (nit == nodes.end()) return QString();
-                path += QLatin1Char('/') + nit->name;
-                m_frnPathCache.insert(chain[i], path);
-            }
+        QString path = base;
+        for (int i = depth - 1; i >= 0; --i) {
+            const Node& nd = nodes[*indexOf.constFind(chain[i])];
+            path += QLatin1Char('/');
+            path += QString::fromWCharArray(names + nd.nameOff / 2, nd.nameLen);
+            m_frnPathCache.insert(chain[i], path);
         }
         return path;
     };
 
-    for (auto it = nodes.constBegin(); it != nodes.constEnd(); ++it) {
-        if (it->isDir) { pathOf(it.key()); continue; } // 目录只注册路径
+    for (quint32 idx = 0; idx < nodes.size(); ++idx) {
+        const Node& nd = nodes[idx];
+        if (nd.isDir) { pathOf(nd.frn); continue; } // 目录只注册路径
         Record r;
-        r.fileReferenceNumber = it.key();
-        r.parentReferenceNumber = it->parent;
+        r.fileReferenceNumber = nd.frn;
+        r.parentReferenceNumber = nd.parent;
         r.isDirectory = false;
-        r.path = pathOf(it.key());
-        r.size = it->size;
-        r.lastModifiedMs = it->mtimeMs;
+        r.path = pathOf(nd.frn);
+        r.size = nd.size;
+        r.lastModifiedMs = nd.mtimeMs;
         if (r.path.isEmpty()) continue;
         if (!onRecord(r)) break;
     }
