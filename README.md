@@ -2,8 +2,6 @@
 
 Qt6 / C++17 / MSVC /MT 全静态单文件，兼容 Windows 8+。
 
-![概览页](docs/screenshots/overview.png)
-
 ## 核心功能
 
 | 模块 | 说明 |
@@ -11,20 +9,12 @@ Qt6 / C++17 / MSVC /MT 全静态单文件，兼容 Windows 8+。
 | 概览 | 磁盘饼图 + 空间柱状图 + 磁盘信息表 |
 | 垃圾清理 | 12 类常见垃圾（临时文件/缓存/回收站等），复选框勾选、实时占比图 |
 
-![垃圾清理](docs/screenshots/clean.png)
 | 重复文件 | 按大小预筛 + 哈希精确比对 |
 
-![重复文件](docs/screenshots/duplicate.png)
 | 大文件 | 按磁盘/大小阈值/扩展名组扫描，12 类型组可搜索下拉；小文件/小目录自动剪枝提速 |
-
-![大文件](docs/screenshots/bigfile.png)
 
 | 空间分析 | 目录树占比、彩色矩形图 |
 | 碎片整理 | 机械盘 defrag / SSD TRIM 优化 |
-
-![碎片整理](docs/screenshots/defrag.png)
-
-![空间分析](docs/screenshots/analyzer.png)
 
 ## 扫描加速架构（三层）
 
