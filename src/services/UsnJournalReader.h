@@ -37,8 +37,9 @@ public:
     bool enumerateAll(const std::function<bool(const Record&)>& onRecord,
                       const std::function<bool()>& isCancelled = {});
 
-    // 增强版：直接读取原始 $MFT 解析 $FILE_NAME 属性，
-    // Record 同时带 size 与 lastModifiedMs（USN 记录本身不含这些字段）。
+    // 增强版：直接读取原始 $MFT。
+    // 大小取自未命名 $DATA（权威）；名字/父/mtime 取自 $FILE_NAME。
+    // （勿用 $FILE_NAME.realSize 做阈值——该字段常陈旧，会导致大文件漏扫。）
     // minFileSize > 0 时，小于该字节数的文件在解析阶段即被跳过
     // （不建节点、不拼路径），大文件扫描可大幅提速并降低内存占用；
     // 目录始终保留（路径回溯需要）。失败返回 false（调用方可回退）。

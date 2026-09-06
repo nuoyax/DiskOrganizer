@@ -33,6 +33,7 @@ private:
     void renderPage();          // 渲染当前页切片（m_files → 表格）
     int totalPages() const;
     void updateDeleteButtonState();
+    void fitColumnsToContents(); // 按当前页内容估算列宽
 
     SearchableComboBox* m_driveCombo = nullptr;
     QLineEdit* m_dirEdit = nullptr;     // 目录级扫描（空=整盘）

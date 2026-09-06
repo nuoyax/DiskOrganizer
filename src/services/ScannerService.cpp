@@ -105,7 +105,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                 QList<FileInfo> out;
                 out.reserve(200000);
                 qint64 count = 0;
-                // 优先带元数据版本（size/mtime 来自 MFT $FILE_NAME），
+                // 优先带元数据版本（size 来自 $DATA，name/mtime 来自 $FILE_NAME），
                 // 大小阈值在 MFT 解析阶段剪枝（小文件不建节点/拼路径）。
                 // 失败再退到纯 USN 枚举，最后才回退目录遍历。
                 bool ok = usn.enumerateAllWithMeta([&](const DiskOrganizer::UsnJournalReader::Record& r) {
@@ -116,6 +116,7 @@ QList<FileInfo> ScannerService::scanBlocking(const QStringList& rootPaths,
                     info.isDir = r.isDirectory;
                     info.isSymlink = false;
                     info.size = r.size;
+                    info.lastModified = static_cast<qint64>(r.lastModifiedMs);
                     info.extension = info.name.contains(QLatin1Char('.'))
                         ? QLatin1Char('.') + info.name.section(QLatin1Char('.'), -1).toLower()
                         : QString();

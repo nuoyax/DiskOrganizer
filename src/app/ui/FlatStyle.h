@@ -1,12 +1,83 @@
 #pragma once
 #include <QWidget>
+#include <QString>
+#include <QDir>
+#include <QFile>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
+#include <QStandardPaths>
 
 // 扁平化设计 QSS —— 参考主流清理工具（CleanMaster / Wise / CCleaner 新版）的现代风格：
 // 左侧导航 + 卡片式内容区 + 主色强调 + 大圆角 + 柔和阴影色
 namespace DiskOrganizer {
 
-inline const char* flatStyleSheet() {
-    return R"(
+namespace {
+
+enum class IndicatorKind { Check, Partial };
+
+// 写出勾选/半选 PNG（QSS image 用，静态 Qt 无内置勾选图）
+inline QString ensureIndicatorIcon(const char* name, IndicatorKind kind) {
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    QDir().mkpath(dir);
+    const QString path = dir + QLatin1Char('/') + QLatin1String(name);
+    {
+        QPixmap pm(28, 28); // 2x @14px
+        pm.fill(Qt::transparent);
+        QPainter painter(&pm);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::white);
+        if (kind == IndicatorKind::Check) {
+            QPainterPath mark;
+            mark.moveTo(5.0, 14.5);
+            mark.lineTo(11.0, 20.5);
+            mark.lineTo(23.0, 7.5);
+            mark.lineTo(20.5, 5.5);
+            mark.lineTo(11.0, 16.0);
+            mark.lineTo(7.5, 12.5);
+            mark.closeSubpath();
+            painter.drawPath(mark);
+        } else {
+            painter.drawRoundedRect(QRectF(6, 12, 16, 4), 2, 2);
+        }
+        painter.end();
+        pm.save(path, "PNG");
+    }
+    QString url = path;
+    url.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return url;
+}
+
+inline QString checkMarkUrl() {
+    static const QString u = ensureIndicatorIcon("cb_check.png", IndicatorKind::Check);
+    return u;
+}
+
+inline QString partialMarkUrl() {
+    static const QString u = ensureIndicatorIcon("cb_partial.png", IndicatorKind::Partial);
+    return u;
+}
+
+} // namespace
+
+// 表头全选等局部 QSS 复用
+inline QString checkBoxIndicatorStyle() {
+    return QStringLiteral(
+        "QCheckBox{background:transparent;spacing:0;margin:0;padding:0;}"
+        "QCheckBox::indicator{width:14px;height:14px;border:1px solid #8A93A8;"
+        "border-radius:3px;background:#FFFFFF;}"
+        "QCheckBox::indicator:hover{border-color:#2F6FED;}"
+        "QCheckBox::indicator:checked{background:#2F6FED;border-color:#2F6FED;"
+        "image:url(%1);}"
+        "QCheckBox::indicator:indeterminate{background:#2F6FED;border-color:#2F6FED;"
+        "image:url(%2);}").arg(checkMarkUrl(), partialMarkUrl());
+}
+
+inline QString flatStyleSheet() {
+    const QString check = checkMarkUrl();
+    const QString partial = partialMarkUrl();
+    return QStringLiteral(R"(
 /* ===== 全局 ===== */
 QMainWindow, QDialog { background: #F7F8FC; }
 QWidget {
@@ -83,35 +154,50 @@ QLineEdit, QComboBox {
     padding: 8px 12px; selection-background-color: #2F6FED;
 }
 QLineEdit:focus, QComboBox:focus { border-color: #2F6FED; }
-/* 非 editable 下拉：QSS 三角箭头有效（editable 的箭头由 SearchableComboBox 代码绘制） */
-QComboBox::drop-down { border: none; width: 26px; }
-QComboBox::down-arrow {
-    width: 0; height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #8A93A8;
-    margin-right: 8px;
+QComboBox::drop-down {
+    border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right;
 }
-QComboBox::down-arrow:on { border-top-color: #2F6FED; }
-/* editable 下拉（SearchableComboBox）：隐藏原生箭头区域，箭头是行编辑尾部动作 */
 QComboBox[editable="true"]::drop-down { border: none; width: 0; }
-QComboBox[editable="true"]::down-arrow { width: 0; height: 0; border: none; }
+QComboBox[editable="true"]::down-arrow { image: none; width: 0; height: 0; border: none; }
 QComboBox QAbstractItemView {
     background: #FFFFFF; border: 1px solid #ECF0F7; border-radius: 8px;
     selection-background-color: #EAF0FE; selection-color: #2F6FED;
     outline: none;
 }
 
-/* ===== 复选框 ===== */
-QCheckBox { spacing: 8px; background: transparent; }
+/* ===== 复选框（小号 + 白勾）===== */
+QCheckBox { spacing: 6px; background: transparent; }
 QCheckBox::indicator {
-    width: 18px; height: 18px; border: 1.5px solid #C3CEE8; border-radius: 5px;
-    background: white;
+    width: 14px; height: 14px;
+    border: 1px solid #C3CEE8; border-radius: 3px;
+    background: #FFFFFF;
 }
 QCheckBox::indicator:hover { border-color: #2F6FED; }
 QCheckBox::indicator:checked {
     background: #2F6FED; border-color: #2F6FED;
-    image: url(:/qt-project.org/styles/commonstyle/images/standardbutton-apply-16.png);
+    image: url(%1);
+}
+QCheckBox::indicator:indeterminate {
+    background: #2F6FED; border-color: #2F6FED;
+    image: url(%2);
+}
+
+/* 树/表内复选框（与 QCheckBox 同款，避免默认大框无勾） */
+QTreeWidget::indicator, QTableWidget::indicator, QListWidget::indicator {
+    width: 14px; height: 14px;
+    border: 1px solid #C3CEE8; border-radius: 3px;
+    background: #FFFFFF;
+}
+QTreeWidget::indicator:hover, QTableWidget::indicator:hover, QListWidget::indicator:hover {
+    border-color: #2F6FED;
+}
+QTreeWidget::indicator:checked, QTableWidget::indicator:checked, QListWidget::indicator:checked {
+    background: #2F6FED; border-color: #2F6FED;
+    image: url(%1);
+}
+QTreeWidget::indicator:indeterminate, QTableWidget::indicator:indeterminate {
+    background: #2F6FED; border-color: #2F6FED;
+    image: url(%2);
 }
 
 /* ===== 列表/树/表 ===== */
@@ -135,6 +221,20 @@ QHeaderView::section {
     background: #FAFBFE; color: #8A93A8; border: none;
     border-bottom: 1px solid #ECF0F7;
     padding: 9px 10px; font-weight: 600; font-size: 12px;
+}
+QHeaderView::down-arrow {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #5A6478;
+    margin-left: 4px;
+}
+QHeaderView::up-arrow {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid #5A6478;
+    margin-left: 4px;
 }
 QTableCornerButton::section { background: #FAFBFE; border: none; }
 
@@ -172,7 +272,7 @@ QSplitter::handle { background: #ECF0F7; width: 2px; }
 /* ===== 消息框 ===== */
 QMessageBox { background: #FFFFFF; }
 QMessageBox QLabel { background: transparent; }
-)";
+)").arg(check, partial);
 }
 
 } // namespace DiskOrganizer

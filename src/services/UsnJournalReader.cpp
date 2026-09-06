@@ -218,22 +218,30 @@ struct MftRecordHeader {
     WORD updateSeqSize;    // 含自身，*2 字节
     DWORDLONG logSeqNumber;
     WORD sequenceNumber;
-    WORD flags;            // 0x01 in use, 0x02 directory
-    WORD attributeOffset;
+    WORD hardLinkCount;    // @0x12；缺此字段会导致 flags 错位到硬链接数
+    WORD attributeOffset;  // @0x14
+    WORD flags;            // @0x16：0x01 in use，0x02 directory
     DWORD bytesUsed;
     DWORD bytesAllocated;
-    DWORDLONG baseRecord;
+    DWORDLONG baseRecord;  // 非 0 = 扩展记录，属性在基记录
     WORD nextAttributeId;
 };
 
 struct AttributeHeader {
-    DWORD type;            // 0x30 = $FILE_NAME
+    DWORD type;            // 0x30 = $FILE_NAME, 0x80 = $DATA
     DWORD length;
     BYTE  nonResident;
     BYTE  nameLength;
     WORD  nameOffset;
     WORD  flags;
     WORD  attributeId;
+};
+
+// resident 属性公共尾（紧接 AttributeHeader）：valueLength / valueOffset
+struct ResidentAttributeTail {
+    DWORD valueLength;
+    WORD  valueOffset;
+    WORD  residentFlags;
 };
 
 struct FileNameAttribute { // resident value 部分
@@ -251,6 +259,28 @@ struct FileNameAttribute { // resident value 部分
 };
 #pragma pack(pop)
 
+// 未命名 $DATA 的真实大小（权威；$FILE_NAME.realSize 常陈旧/为 0）
+// resident → valueLength；non-resident → DataSize@+0x30
+inline bool unnamedDataSize(const BYTE* rec, DWORD attrOff, DWORD attrLen,
+                            DWORD recSize, quint64& outSize) {
+    if (attrOff + sizeof(AttributeHeader) > recSize || attrLen < sizeof(AttributeHeader))
+        return false;
+    auto* attr = reinterpret_cast<const AttributeHeader*>(rec + attrOff);
+    if (attr->nameLength != 0) return false; // 命名流跳过
+    if (!attr->nonResident) {
+        if (attrLen < sizeof(AttributeHeader) + sizeof(ResidentAttributeTail)) return false;
+        auto* tail = reinterpret_cast<const ResidentAttributeTail*>(
+            rec + attrOff + sizeof(AttributeHeader));
+        outSize = tail->valueLength;
+        return true;
+    }
+    // non-resident：$DATA DataSize 相对属性头偏移 0x30
+    constexpr DWORD kDataSizeOff = 0x30;
+    if (attrLen < kDataSizeOff + 8 || attrOff + kDataSizeOff + 8 > recSize) return false;
+    outSize = *reinterpret_cast<const DWORDLONG*>(rec + attrOff + kDataSizeOff);
+    return true;
+}
+
 // FILETIME(100ns since 1601) -> epoch ms
 inline qint64 fileTimeToEpochMs(qint64 ft) {
     return ft ? (ft / 10000LL) - 11644473600000LL : 0;
@@ -267,22 +297,22 @@ inline bool pathIsUnder(const QString& path, const QString& prefix) {
 }
 
 // 校验并应用 fixup，返回记录是否有效
+// USA[0]=校验值；每个扇区尾 2 字节在读出时应等于校验值，
+// 真实的原始数据保存在 USA[1..n-1]，需覆盖回去
 bool applyFixup(BYTE* rec, DWORD recSize) {
     auto* h = reinterpret_cast<MftRecordHeader*>(rec);
     if (h->magic != 0x454C4946 /*FILE*/) return false;
     const WORD usaOffset = h->updateSeqOffset;
     const WORD usaCount = h->updateSeqSize;
     if (usaOffset < sizeof(MftRecordHeader) || usaCount == 0) return false;
-    const DWORD endSector = recSize - 2;
+    const WORD check = *(reinterpret_cast<WORD*>(rec + usaOffset)); // USA[0]
     for (WORD i = 1; i < usaCount; ++i) {
         const DWORD sectorEnd = i * 512 - 2;
         if (sectorEnd + 2 > recSize) return false;
-        const WORD check = *reinterpret_cast<WORD*>(rec + usaOffset + i * 2);
         WORD& at = *reinterpret_cast<WORD*>(rec + sectorEnd);
-        if (at != check) { at = check; } // 多数场景是值匹配；不一致按 fixup 恢复
-        Q_UNUSED(check);
+        if (at != check) return false; // 校验不匹配=坏扇区
+        at = *(reinterpret_cast<WORD*>(rec + usaOffset + i * 2)); // 恢复原始数据
     }
-    Q_UNUSED(endSector);
     return true;
 }
 
@@ -428,50 +458,73 @@ bool UsnJournalReader::enumerateAllWithMeta(
             if (h->magic != 0x454C4946) { ++badMagic; continue; }
             if (!applyFixup(rec, DWORD(recSize))) { ++fixupFail; continue; }
             if (!(h->flags & 0x01)) { ++unused; continue; } // 未使用记录跳过
+            // 扩展记录（base≠0）属性挂在基记录上，本身无独立文件名/路径
+            if ((h->baseRecord & 0x0000FFFFFFFFFFFFULL) != 0) continue;
 
             Node n;
             n.frn = frnBase + i;
             n.isDir = (h->flags & 0x02) != 0;
-            bool skipRecord = false;
 
-            // 遍历 resident 属性找 $FILE_NAME (0x30)
+            // 单次遍历：同时取 $FILE_NAME（名/父/mtime）与未命名 $DATA（真实大小）
+            // $FILE_NAME.realSize 在 NTFS 上常不更新（扩写后仍为 0），
+            // 用它做 ≥100MB 剪枝会漏掉绝大多数大文件；必须以 $DATA 为准。
+            // 名字：非 POSIX（Win32/DOS）优先，POSIX 作回退（防父链断裂）。
             DWORD off = h->attributeOffset;
+            DWORD posixOff = 0;
+            bool havePosix = false;
+            DWORD win32Off = 0;
+            bool haveWin32 = false;
+            quint64 dataSize = 0;
+            bool haveDataSize = false;
             while (off + sizeof(AttributeHeader) <= recSize) {
                 auto* attr = reinterpret_cast<AttributeHeader*>(rec + off);
                 if (attr->type == 0xFFFFFFFF || attr->length < sizeof(AttributeHeader)) break;
+                if (off + attr->length > recSize) break;
                 if (attr->type == 0x30 && !attr->nonResident
-                    && off + attr->length <= recSize
                     && attr->length >= sizeof(AttributeHeader) + sizeof(FileNameAttribute)) {
-                    // resident 属性 value 起始 = 属性头 0x18 字节
                     auto* fn = reinterpret_cast<FileNameAttribute*>(rec + off + 0x18);
-                    if (fn->nameNamespace != 2 /*POSIX 保留*/) {
-                        // 提前剪枝：小文件不建 Node，直接跳过该记录
-                        // （目录除外——父链回溯需要全部目录）
-                        if (!n.isDir && minFileSize > 0
-                            && fn->realSize < minFileSize) {
-                            ++smallSkipped;
-                            skipRecord = true;
-                            break;
-                        }
-                        n.parent = fn->parentDirectory & 0x0000FFFFFFFFFFFFULL;
-                        n.size = fn->realSize;
-                        n.mtimeMs = fileTimeToEpochMs(fn->modificationTime.QuadPart);
-                        const WORD nameLen = fn->nameLength;
-                        const BYTE* namePtr = rec + off + 0x18 + sizeof(FileNameAttribute);
-                        if (nameLen > 0 && off + 0x18 + sizeof(FileNameAttribute)
-                                + size_t(nameLen) * 2 <= recSize) {
-                            n.nameOff = quint32(p.arena.size());
-                            n.nameLen = nameLen;
-                            p.arena.append(reinterpret_cast<const char*>(namePtr),
-                                           size_t(nameLen) * 2);
+                    if (fn->nameLength > 0) {
+                        if (fn->nameNamespace == 2 /*POSIX*/) {
+                            if (!havePosix) { havePosix = true; posixOff = off; }
+                        } else if (!haveWin32) {
+                            haveWin32 = true;
+                            win32Off = off;
                         }
                     }
-                    break; // 取第一个 $FILE_NAME（还有一个 win32/正名即可）
+                } else if (attr->type == 0x80 && !haveDataSize) {
+                    quint64 sz = 0;
+                    if (unnamedDataSize(rec, off, attr->length, DWORD(recSize), sz)) {
+                        dataSize = sz;
+                        haveDataSize = true;
+                    }
                 }
                 off += attr->length;
             }
-            if (skipRecord) continue;
+
+            const DWORD nameAttrOff = haveWin32 ? win32Off
+                                    : (havePosix ? posixOff : 0);
+            if (nameAttrOff == 0) { ++noName; continue; }
+            auto* fn = reinterpret_cast<FileNameAttribute*>(rec + nameAttrOff + 0x18);
+            n.parent = fn->parentDirectory & 0x0000FFFFFFFFFFFFULL;
+            n.mtimeMs = fileTimeToEpochMs(fn->modificationTime.QuadPart);
+            // 大小：$DATA 优先，缺失时回退 $FILE_NAME（目录通常无未命名 $DATA）
+            n.size = haveDataSize ? dataSize : fn->realSize;
+            const WORD nameLen = fn->nameLength;
+            const BYTE* namePtr = rec + nameAttrOff + 0x18 + sizeof(FileNameAttribute);
+            if (nameLen > 0 && nameAttrOff + 0x18 + sizeof(FileNameAttribute)
+                    + size_t(nameLen) * 2 <= recSize) {
+                n.nameOff = quint32(p.arena.size());
+                n.nameLen = nameLen;
+                p.arena.append(reinterpret_cast<const char*>(namePtr),
+                               size_t(nameLen) * 2);
+            }
             if (n.nameLen == 0) { ++noName; continue; }
+
+            // 剪枝必须用真实大小；目录始终保留（父链回溯）
+            if (!n.isDir && minFileSize > 0 && n.size < minFileSize) {
+                ++smallSkipped;
+                continue;
+            }
             p.nodes.push_back(n);
         }
         p.smallSkipped = smallSkipped;
@@ -605,9 +658,8 @@ bool UsnJournalReader::enumerateAllWithMeta(
         if (arenaBase)
             for (auto& n : p.nodes) n.nameOff += arenaBase;
         arena.append(p.arena);
-        const quint32 idxBase = quint32(nodes.size());
         for (auto& n : p.nodes) {
-            indexOf.insert(n.frn, idxBase + quint32(nodes.size()));
+            indexOf.insert(n.frn, quint32(nodes.size()));
             nodes.push_back(std::move(n));
         }
         bufs[c].reset(); // 释放该块原始缓冲
@@ -635,6 +687,7 @@ bool UsnJournalReader::enumerateAllWithMeta(
     // 路径拼装：只为候选文件触发，沿父链向上找已缓存祖先，再逐级下拼。
     // 目录节点不再全量预拼（百万级目录的 QString 拼接是此前的最大热点）。
     const wchar_t* names = reinterpret_cast<const wchar_t*>(arena.constData());
+    quint64 emitted = 0, noPathDropped = 0, prefixDropped = 0;
     auto pathOf = [&](quint64 frn) -> QString {
         quint64 chain[256];
         int depth = 0;
@@ -644,10 +697,11 @@ bool UsnJournalReader::enumerateAllWithMeta(
             auto cit = m_frnPathCache.constFind(cur);
             if (cit != m_frnPathCache.constEnd()) { base = *cit; break; }
             auto iit = indexOf.constFind(cur);
-            if (iit == indexOf.constEnd()) break; // 不在本卷 MFT 中（如卷根 5）
-            if (depth < int(sizeof(chain) / sizeof(chain[0]))) chain[depth++] = cur;
+            if (iit == indexOf.constEnd()) break; // 不在本卷 MFT 中（如未收录的卷根）
             const Node& nd = nodes[*iit];
-            if (nd.parent == cur) break; // 环保护
+            // 卷根 parent==self，名字常为 "."；若拼进路径会变成 C:/./Users
+            if (nd.parent == cur) break;
+            if (depth < int(sizeof(chain) / sizeof(chain[0]))) chain[depth++] = cur;
             cur = nd.parent;
         }
         QString path = base;
@@ -657,8 +711,11 @@ bool UsnJournalReader::enumerateAllWithMeta(
         }
         for (int i = depth - 1; i >= 0; --i) {
             const Node& nd = nodes[*indexOf.constFind(chain[i])];
+            const QString name = QString::fromWCharArray(names + nd.nameOff / 2, nd.nameLen);
+            if (name.isEmpty() || name == QLatin1Char('.') || name == QLatin1String(".."))
+                continue;
             path += QLatin1Char('/');
-            path += QString::fromWCharArray(names + nd.nameOff / 2, nd.nameLen);
+            path += name;
             m_frnPathCache.insert(chain[i], path);
         }
         return path;
@@ -676,13 +733,17 @@ bool UsnJournalReader::enumerateAllWithMeta(
         r.path = pathOf(nd.frn);
         r.size = nd.size;
         r.lastModifiedMs = nd.mtimeMs;
-        if (r.path.isEmpty()) continue;
+        if (r.path.isEmpty()) { ++noPathDropped; continue; }
         // 目录级扫描：只回报指定子树内的文件（按 '/' 分段前缀比较，避免 "C:/a" 误匹配 "C:/ab"）
         if (!prefix.isEmpty()) {
-            if (!pathIsUnder(r.path, prefix)) continue;
+            if (!pathIsUnder(r.path, prefix)) { ++prefixDropped; continue; }
         }
+        ++emitted;
         if (!onRecord(r)) break;
     }
+    LOG << "MFT output: emitted=" << emitted
+          << " noPathDropped=" << noPathDropped
+          << " prefixDropped=" << prefixDropped;
     return true;
 }
 

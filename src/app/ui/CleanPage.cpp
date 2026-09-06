@@ -3,10 +3,12 @@
 #include "Icons.h"
 #include "util/SizeFormatter.h"
 #include "SettingsDialog.h"
+#include "services/Logger.h"
 #include <QCheckBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
@@ -128,7 +130,7 @@ void CleanPage::doScan() {
     m_tree->clear();
     m_items.clear();
     m_summary->setText(tr("正在扫描……"));
-    m_progress->setRange(0, 0);   // 忙碌指示
+    m_progress->setRange(0, 0);
 
     const int nCats = int(CleanCategory::CustomRules) + 1;
     QList<CleanCategory> cats;
@@ -136,49 +138,62 @@ void CleanPage::doScan() {
         if (m_catChecks[i]->isChecked())
             cats.append(CleanCategory(i));
 
-    auto* itemsPtr = new QList<CleanItem>;
-    QtConcurrent::run([itemsPtr, cats]() {
-        CleanerService svc;
-        *itemsPtr = svc.findCleanableItems(cats);
-    }).then(this, [this, itemsPtr]() {
-        m_progress->setRange(0, 1);
-        m_progress->setValue(1);
-        m_items = *itemsPtr;
-        delete itemsPtr;
-
-        m_tree->blockSignals(true);
-        QMap<int, QList<const CleanItem*>> byCat;
-        for (const auto& it : m_items)
-            byCat[int(it.category)].append(&it);
-
-        for (auto cIt = byCat.keyBegin(); cIt != byCat.keyEnd(); ++cIt) {
-            const int cat = *cIt;
-            auto* node = new QTreeWidgetItem(m_tree,
-                {categoryDisplayName(CleanCategory(cat)), QString(), QString()});
-            node->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate);
-            node->setCheckState(0, Qt::Checked);
-            node->setData(0, kRoleCategory, cat);
-            qint64 total = 0;
-            for (const CleanItem* item : byCat[cat]) {
-                auto* child = new QTreeWidgetItem(node,
-                    {item->path, formatSize(item->size),
-                     item->safeToDelete ? tr("[安全]") : tr("[谨慎] ") + item->description});
-                child->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
-                child->setCheckState(0, Qt::Checked);
-                child->setData(0, kRolePath, item->path);
-                child->setData(0, kRoleSize, item->size);
-                child->setData(0, kRoleCautious, !item->safeToDelete);
-                total += item->size;
-            }
-            node->setText(1, formatSize(total));
-        }
-        m_tree->blockSignals(false);
-
-        updateSummary();
+    if (cats.isEmpty()) {
+        m_summary->setText(tr("请至少勾选一个清理类别"));
         m_scanBtn->setEnabled(true);
-        m_cleanBtn->setEnabled(!m_items.isEmpty());
-        if (m_items.isEmpty())
-            m_summary->setText(tr("扫描完成：未发现可清理项目"));
+        m_progress->setRange(0, 1);
+        return;
+    }
+
+    (void)QtConcurrent::run([this, cats]() {
+        CleanerService svc;
+        const QList<CleanItem> found = svc.findCleanableItems(cats);
+        QMetaObject::invokeMethod(this, [this, found]() {
+            m_progress->setRange(0, 1);
+            m_progress->setValue(1);
+            m_items = found;
+
+            m_tree->blockSignals(true);
+            m_tree->clear();
+            QMap<int, QList<const CleanItem*>> byCat;
+            for (const auto& it : m_items)
+                byCat[int(it.category)].append(&it);
+
+            for (auto cIt = byCat.keyBegin(); cIt != byCat.keyEnd(); ++cIt) {
+                const int cat = *cIt;
+                auto* node = new QTreeWidgetItem(m_tree,
+                    {categoryDisplayName(CleanCategory(cat)), QString(), QString()});
+                node->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate);
+                node->setCheckState(0, Qt::Checked);
+                node->setData(0, kRoleCategory, cat);
+                qint64 total = 0;
+                for (const CleanItem* item : byCat[cat]) {
+                    const QString name = item->path.startsWith(QStringLiteral("RecycleBin://"))
+                        ? tr("回收站内容")
+                        : item->path;
+                    auto* child = new QTreeWidgetItem(node,
+                        {name, formatSize(item->size),
+                         item->safeToDelete ? tr("[安全]") : tr("[谨慎] ") + item->description});
+                    child->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+                    child->setCheckState(0, Qt::Checked);
+                    child->setData(0, kRolePath, item->path);
+                    child->setData(0, kRoleSize, item->size);
+                    child->setData(0, kRoleCautious, !item->safeToDelete);
+                    child->setToolTip(0, item->path);
+                    total += item->size;
+                }
+                node->setText(1, formatSize(total));
+            }
+            m_tree->blockSignals(false);
+            m_tree->expandToDepth(0);
+
+            updateSummary();
+            m_scanBtn->setEnabled(true);
+            m_cleanBtn->setEnabled(!m_items.isEmpty());
+            if (m_items.isEmpty())
+                m_summary->setText(tr("扫描完成：未发现可清理项目"));
+            LOG << "CleanPage UI items=" << m_items.size();
+        }, Qt::QueuedConnection);
     });
 }
 
@@ -232,26 +247,41 @@ void CleanPage::doClean() {
             it.category = cc;
             it.path = c->data(0, kRolePath).toString();
             it.size = c->data(0, kRoleSize).toLongLong();
-            it.safeToDelete = !c->data(0, kRoleCautious).toBool();
+            // 用户已勾选即确认删除（含「谨慎」项）
+            it.safeToDelete = true;
             it.description = c->text(2);
             selected.append(it);
         }
     }
-    if (selected.isEmpty()) { m_summary->setText(tr("请先选择要清理的项目")); return; }
+    if (selected.isEmpty()) {
+        m_summary->setText(tr("请先选择要清理的项目"));
+        return;
+    }
 
     m_scanBtn->setEnabled(false);
     m_cleanBtn->setEnabled(false);
     m_summary->setText(tr("正在清理 %1 项……").arg(selected.size()));
     m_progress->setRange(0, 0);
 
-    QtConcurrent::run([selected, recycle = m_recycleBin]() {
+    (void)QtConcurrent::run([this, selected, recycle = m_recycleBin]() {
         CleanerService svc;
-        return svc.clean(selected, recycle);
-    }).then(this, [this](int n) {
-        m_progress->setRange(0, 1);
-        m_progress->setValue(1);
-        m_summary->setText(tr("已清理 %1 项，正在重新扫描……").arg(n));
-        doScan();
+        QObject::connect(&svc, &CleanerService::progress, this,
+            [this](int percent, const QString& path) {
+                QMetaObject::invokeMethod(this, [this, percent, path]() {
+                    m_progress->setRange(0, 100);
+                    m_progress->setValue(percent);
+                    m_summary->setText(path);
+                }, Qt::QueuedConnection);
+            }, Qt::DirectConnection);
+        const qint64 freed = svc.clean(selected, recycle);
+        QMetaObject::invokeMethod(this, [this, freed, n = selected.size()]() {
+            m_progress->setRange(0, 1);
+            m_progress->setValue(1);
+            m_summary->setText(tr("已释放 %1（目标 %2 项），正在重新扫描……")
+                                   .arg(formatSize(freed)).arg(n));
+            LOG << "CleanPage clean freed=" << freed << " requested=" << n;
+            doScan();
+        }, Qt::QueuedConnection);
     });
 }
 
