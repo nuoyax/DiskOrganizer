@@ -277,7 +277,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_pageSizeCombo->setMinimumWidth(100);
     // 不自定义 down-arrow（border 三角在静态 Qt 下常显示成 □）
     m_pageSizeCombo->setStyleSheet(
-        "QComboBox{padding:6px 10px; min-height:28px;}");
+        "QComboBox{padding:6px 10px; min-height:28px; border-radius:8px; border:1.5px solid #D8D5E8;}");
     pageRow->addWidget(m_pageSizeCombo);
     m_prevBtn = new QPushButton(tr("上一页"));
     m_nextBtn = new QPushButton(tr("下一页"));
