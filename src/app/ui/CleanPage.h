@@ -14,8 +14,6 @@ class QFrame;
 
 namespace DiskOrganizer {
 
-class PieChart;
-
 // 按 clean-light 稿重构：hero 汇总卡 + 分类卡片 grid + 明细树卡 + 底部操作条
 class CleanPage : public PageBase {
     Q_OBJECT
@@ -51,7 +49,6 @@ private:
     QProgressBar* m_progress = nullptr;
     QPushButton* m_scanBtn = nullptr;
     QPushButton* m_cleanBtn = nullptr;
-    PieChart* m_pie = nullptr;
     QList<CleanItem> m_items;
     bool m_updating = false;                 // 防递归
     bool m_recycleBin = true;

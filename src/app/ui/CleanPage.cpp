@@ -14,6 +14,7 @@
 #include <QMap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -94,6 +95,18 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     headRow->addWidget(whitelistBtn);
     root->addLayout(headRow);
 
+    // ===== 上半区（页头下所有卡）放滚动区，保证明细树始终可见不挤压 =====
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea{background:transparent;} QWidget#cleanScrollBody{background:transparent;}");
+    auto* body = new QWidget;
+    body->setObjectName("cleanScrollBody");
+    auto* topLayout = new QVBoxLayout(body);
+    topLayout->setContentsMargins(0, 0, 0, 0);
+    topLayout->setSpacing(12);
+    auto*& troot = topLayout; // 后续上半区布局一律写入 troot
+
     // ===== Hero 汇总卡 =====
     auto* hero = new QFrame;
     hero->setProperty("class", "card");
@@ -130,9 +143,7 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     });
     heroTop->addWidget(selectAll);
     hv->addLayout(heroTop);
-    hv->addWidget(m_pie = new PieChart, 0);
-    m_pie->setMaximumHeight(140);
-    root->addWidget(hero);
+    troot->addWidget(hero);
 
     // ===== 分类卡片 grid =====
     auto* catHeader = new QHBoxLayout;
@@ -143,7 +154,7 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     catHeader->addWidget(catTitle);
     catHeader->addStretch();
     catHeader->addWidget(catHint);
-    root->addLayout(catHeader);
+    troot->addLayout(catHeader);
 
     auto* grid = new QGridLayout;
     grid->setSpacing(12);
@@ -195,7 +206,11 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
         cv->addLayout(bottom);
         grid->addWidget(cc.card, i / 3, i % 3);
     }
-    root->addLayout(grid);
+    troot->addLayout(grid);
+
+    topLayout->addStretch();
+    scroll->setWidget(body);
+    root->addWidget(scroll, 1);
 
     // ===== 明细树卡 =====
     auto* treeCard = new QFrame;
@@ -377,7 +392,6 @@ void CleanPage::onItemChanged(QTreeWidgetItem* item, int column) {
 void CleanPage::updateSummary() {
     qint64 total = 0;
     int count = 0;
-    QList<QPair<QString, double>> slices;
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         auto* cat = m_tree->topLevelItem(i);
         qint64 catTotal = 0;
@@ -393,8 +407,6 @@ void CleanPage::updateSummary() {
             cat->setText(1, catCount > 0
                 ? QString("%1 · %2 项").arg(formatSize(catTotal)).arg(catCount)
                 : tr("已全不选"));
-        if (catTotal > 0)
-            slices.append({cat->text(0), double(catTotal)});
     }
     // hero 大数字（GB 显示，与稿一致保留两位）
     const double gb = total / (1024.0 * 1024.0 * 1024.0);
@@ -404,7 +416,6 @@ void CleanPage::updateSummary() {
         m_heroTotal->setText(QString::number(total / (1024.0 * 1024.0), 'f', 1));
     }
     m_summary->setText(tr("已勾选 %1 项 · 预计释放 %2").arg(count).arg(formatSize(total)));
-    m_pie->setData(slices);
 }
 
 void CleanPage::doClean() {

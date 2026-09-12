@@ -116,13 +116,11 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     // 过滤条件行
     auto* filterRow = new QHBoxLayout;
     m_driveCombo = new SearchableComboBox;
-    const auto drives = enumerateDisks();
-    m_driveCombo->addItem(tr("全部磁盘"), QString());
     // 磁盘项统一用硬盘图标（灰蓝色），与"全部磁盘"的 disk 图标呼应
     const QIcon driveIcon = Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
     const QIcon allIcon = Icons::tinted(QString::fromUtf8(Icons::P::disk), QColor(0x4B, 0x41, 0xE1), 18);
     m_driveCombo->addItem(allIcon, tr("全部磁盘"), QString());
-    for (const auto& d : drives)
+    for (const auto& d : enumerateDisks())
         m_driveCombo->addItem(driveIcon, QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
             ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
     m_driveCombo->setFixedWidth(260);
