@@ -11,6 +11,7 @@
 #include "Charts.h"
 
 #include <QMessageBox>
+#include <QFrame>
 #include <QItemSelectionModel>
 #include <QCheckBox>
 #include <QComboBox>
@@ -61,12 +62,56 @@ public:
 
 BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
+    root->setContentsMargins(24, 18, 24, 18);
     root->setSpacing(12);
 
-    auto* title = new QLabel(tr("扫描磁盘上的大文件与旧文件，结果按磁盘分类，点击表头自由排序"));
-    title->setStyleSheet("color:#6C7A77; background:transparent;");
-    root->addWidget(title);
+    // ===== 页头：大标题 + 副标题 + 指标卡（发现大文件数）=====
+    auto* head = new QHBoxLayout;
+    auto* headCol = new QVBoxLayout;
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(10);
+    auto* title = new QLabel(tr("大文件"));
+    title->setStyleSheet("font-size:24px; font-weight:800; color:#181445; background:transparent;");
+    m_headStatus = new QLabel(tr("扫描引擎已就绪"));
+    m_headStatus->setStyleSheet(
+        "padding:3px 10px; border-radius:12px; background-color:#E6F2EF; color:#006B5F;"
+        "font-size:12px; font-weight:600;");
+    titleRow->addWidget(title);
+    titleRow->addWidget(m_headStatus);
+    titleRow->addStretch();
+    auto* subtitle = new QLabel(tr("扫描磁盘上的大文件与旧文件，结果按磁盘分类，点击表头自由排序"));
+    subtitle->setStyleSheet("color:#6C7A77; background:transparent;");
+    headCol->addLayout(titleRow);
+    headCol->addWidget(subtitle);
+    head->addLayout(headCol, 1);
+
+    // 指标卡：发现大文件数（white card + indigo 图标块）
+    {
+        auto* card = new QFrame(this);
+        card->setProperty("class", "card");
+        auto* h = new QHBoxLayout(card);
+        h->setContentsMargins(14, 10, 14, 10);
+        h->setSpacing(10);
+        auto* chip = new QLabel(card);
+        const int px = 18;
+        chip->setPixmap(Icons::tinted(QString::fromUtf8(Icons::P::bigfile),
+                                      QColor(0x4B, 0x41, 0xE1), px).pixmap(px, px));
+        chip->setFixedSize(34, 34);
+        chip->setAlignment(Qt::AlignCenter);
+        chip->setStyleSheet("background:#EEF2FF; border-radius:8px;");
+        auto* col = new QVBoxLayout;
+        col->setSpacing(0);
+        auto* cap = new QLabel(tr("发现大文件数"), card);
+        cap->setStyleSheet("font-size:11px; color:#6C7A77; background:transparent;");
+        m_countMetric = new QLabel("--", card);
+        m_countMetric->setStyleSheet("font-size:15px; font-weight:800; color:#181445; background:transparent;");
+        col->addWidget(cap);
+        col->addWidget(m_countMetric);
+        h->addWidget(chip);
+        h->addLayout(col, 1);
+        head->addWidget(card);
+    }
+    root->addLayout(head);
 
     // 过滤条件行
     auto* filterRow = new QHBoxLayout;
@@ -384,6 +429,7 @@ void BigFilePage::doScan() {
     m_table->setRowCount(0);
     m_progress->setRange(0, 0);
     m_summary->setText(tr("正在扫描……"));
+    m_headStatus->setText(tr("扫描中……"));
 
     const QString targetDrive = m_driveCombo->currentData().toString();
     // 目录级扫描：优先用输入的目录（必须与所选磁盘同卷）
@@ -481,6 +527,8 @@ void BigFilePage::doScan() {
             m_progress->setValue(1);
             m_files = result;
             populateResults();
+            m_countMetric->setText(tr("%1 个").arg(m_files.size()));
+            m_headStatus->setText(tr("扫描完成"));
             m_deleteBtn->setEnabled(false); // 需勾选后才可删
             updateDeleteButtonState();
             qint64 total = 0;
