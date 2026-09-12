@@ -25,9 +25,9 @@
 namespace DiskOrganizer {
 
 namespace {
-// 侧边导航按钮：可勾选、左对齐、带图标
+// 侧边导航按钮：可勾选、左对齐、带图标（深靛蓝侧栏用浅色图标）
 QPushButton* makeNavBtn(const QString& text, const char* iconPath, QWidget* parent) {
-    auto* b = new QPushButton(Icons::tinted(iconPath, QColor(0x5A, 0x64, 0x78)), text, parent);
+    auto* b = new QPushButton(Icons::tinted(iconPath, QColor(0xC5, 0xC2, 0xE8)), text, parent);
     b->setObjectName("navBtn");
     b->setProperty("class", "navBtn");
     b->setCheckable(true);
@@ -115,7 +115,7 @@ void MainWindow::buildUi() {
         // 图标选中态着色
         connect(btn, &QPushButton::toggled, this, [btn, icon = navs[i].icon]() {
             btn->setIcon(Icons::tinted(icon,
-                btn->isChecked() ? QColor(0x2F, 0x6F, 0xED) : QColor(0x5A, 0x64, 0x78)));
+                btn->isChecked() ? QColor(0x5E, 0xE0, 0xD0) : QColor(0xC5, 0xC2, 0xE8)));
         });
     }
     navGroup->button(0)->setChecked(true);
@@ -134,7 +134,7 @@ QWidget* MainWindow::buildOverviewPage() {
 
     auto* header = new QLabel(tr("磁盘概览"), page);
     header->setProperty("class", "cardTitle");
-    header->setStyleSheet("font-size:20px; font-weight:800; color:#23262F; background:transparent;");
+    header->setStyleSheet("font-size:20px; font-weight:800; color:#181445; background:transparent;");
     auto* hint = new QLabel(tr("双击磁盘行进入空间分析"), page);
     hint->setProperty("class", "hint");
     v->addWidget(header);
