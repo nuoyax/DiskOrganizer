@@ -45,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->showMessage(tr("就绪"));
     setWindowTitle(tr("DiskOrganizer 磁盘整理助手"));
     resize(600, 420);
+    setMinimumSize(600, 420);
 }
 
 void MainWindow::buildUi() {
