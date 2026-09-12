@@ -231,6 +231,7 @@ QTableWidget {
 }
 QTableWidget::item { padding: 4px 8px; border-radius: 4px; }
 QTableWidget::item:selected { background: #E6F2EF; color: #00544A; }
+QTableWidget::item:hover { background: #F1EEE8; }
 
 /* ===== 表头 ===== */
 QHeaderView::section {

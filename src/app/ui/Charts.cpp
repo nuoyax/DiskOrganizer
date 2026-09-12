@@ -3,6 +3,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QFontMetrics>
+#include <QPropertyAnimation>
+#include <QHoverEvent>
 #include <algorithm>
 #include <cmath>
 
@@ -29,13 +31,20 @@ QColor diskSegmentColor(int index) {
 // ============ PieChart ============
 PieChart::PieChart(QWidget* parent) : QWidget(parent) {
     setMinimumSize(280, 200);
+    setMouseTracking(true);
+    setAttribute(Qt::WA_Hover);
 }
 
 void PieChart::setData(const QList<QPair<QString, double>>& slices) {
     m_slices = slices;
     m_total = 0;
     for (const auto& s : m_slices) m_total += s.second;
-    update();
+    // 数据更新时环形展开动效（0→1，250ms）
+    auto* anim = new QPropertyAnimation(this, "progress", this);
+    anim->setDuration(250);
+    anim->setStartValue(0.0);
+    anim->setEndValue(1.0);
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void PieChart::setCenterLabel(const QString& small, const QString& big, const QString& sub) {
@@ -59,14 +68,24 @@ void PieChart::paintEvent(QPaintEvent*) {
     const QPointF center = pieRect.center();
     const double radius = pieRect.width() / 2;
     double startAngle = 90 * 16;
+    const double prog = qBound(0.0, m_progress, 1.0);
 
     int idx = 0;
     for (const auto& slice : m_slices) {
         const double frac = slice.second / m_total;
-        const double span = frac * 360 * 16;
+        const double span = frac * 360 * 16 * prog;
+        const bool hovered = (idx == m_hoverSlice);
         p.setPen(Qt::NoPen);
         p.setBrush(DiskOrganizer::diskSegmentColor(idx));
-        p.drawPie(pieRect, int(startAngle), int(-span));
+        // 悬停切片外扩 6px 高亮
+        if (hovered && prog >= 1.0) {
+            const double mid = qDegreesToRadians((startAngle - span / 2) / 16.0);
+            const double off = 6.0;
+            QRectF hr = pieRect.translated(off * std::cos(mid), -off * std::sin(mid));
+            p.drawPie(hr, int(startAngle), int(-span));
+        } else {
+            p.drawPie(pieRect, int(startAngle), int(-span));
+        }
         startAngle -= span;
         ++idx;
     }
@@ -75,7 +94,9 @@ void PieChart::paintEvent(QPaintEvent*) {
     p.setBrush(palette().window().color());
     p.setPen(Qt::NoPen);
     p.drawEllipse(center, radius * 0.62, radius * 0.62);
-    // 中心三行文案（剩余可用 / 大数字 / 百分比）
+    // 中心三行文案（剩余可用 / 大数字 / 百分比）随动画淡入
+    if (prog > 0.85) {
+        p.setOpacity((prog - 0.85) / 0.15);
     p.setPen(QColor(0x6C, 0x7A, 0x77));
     QFont fSmall = font();
     fSmall.setPointSizeF(qMax(7.0, font().pointSizeF() * 0.78));
@@ -93,6 +114,8 @@ void PieChart::paintEvent(QPaintEvent*) {
     p.setPen(QColor(0x00, 0x6B, 0x5F));
     p.drawText(QRectF(center.x() - radius * 0.6, center.y() + 14, radius * 1.2, 16),
                Qt::AlignHCenter | Qt::AlignVCenter, m_cSub);
+        p.setOpacity(1.0);
+    }
 
     // 图例
     const double lx = pieRect.right() + 18;
@@ -111,6 +134,40 @@ void PieChart::paintEvent(QPaintEvent*) {
                    QString("%1  %2%").arg(slice.first).arg(pct, 0, 'f', 1));
         ly += 22;
         ++idx;
+    }
+}
+
+bool PieChart::event(QEvent* ev) {
+    // 命中检测：落在环形带内 → 记录切片索引并重绘（外扩高亮）
+    if (ev->type() == QEvent::HoverMove || ev->type() == QEvent::HoverEnter) {
+        const QPointF pos = static_cast<QHoverEvent*>(ev)->position();
+    const QRectF pieRect(10, 10, 190, 190);
+    const QPointF c = pieRect.center();
+    const double dist = std::hypot(pos.x() - c.x(), pos.y() - c.y());
+    int hit = -1;
+    if (dist <= pieRect.width() / 2 && dist >= pieRect.width() / 2 * 0.62) {
+        // 画布从 90° 顺时针展开，与 paintEvent 一致
+        double ang = qRadiansToDegrees(std::atan2(c.y() - pos.y(), pos.x() - c.x()));
+        double sweep = 90.0 - ang;
+        while (sweep < 0) sweep += 360.0;
+        double acc = 0;
+        for (int i = 0; i < m_slices.size(); ++i) {
+            acc += m_slices[i].second / m_total * 360.0;
+            if (sweep <= acc) { hit = i; break; }
+        }
+    }
+    if (hit != m_hoverSlice) {
+        m_hoverSlice = hit;
+        update();
+    }
+    }
+    return QWidget::event(ev);
+}
+
+void PieChart::leaveEvent(QEvent*) {
+    if (m_hoverSlice != -1) {
+        m_hoverSlice = -1;
+        update();
     }
 }
 

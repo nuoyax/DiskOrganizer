@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QFrame>
+#include <QElapsedTimer>
 
 namespace DiskOrganizer {
 
@@ -28,9 +29,14 @@ private slots:
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
+private slots:
+    void animateBars();
+
 private:
     struct BarFill { QFrame* fill; double ratio; };
     QList<BarFill> m_barFills;
+    QElapsedTimer m_barAnimTimer;      // 进度条生长动画计时
+    QList<QElapsedTimer> m_barTimers;  // 每条进度条独立计时（重建后重新生长）
     void buildUi();
     void buildMenus();
     QWidget* buildOverviewPage();

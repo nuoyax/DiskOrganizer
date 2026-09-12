@@ -23,6 +23,8 @@
 #include "util/SizeFormatter.h"
 #include "util/FileSystemUtil.h"
 #include <QEvent>
+#include <QTimer>
+#include <cmath>
 
 namespace DiskOrganizer {
 
@@ -392,12 +394,23 @@ void MainWindow::refreshDisks() {
             "QFrame{background:#F4F4F0; border-radius:5px; border:1px solid #EFECF7;}");
         auto* fill = new QFrame(barBg);
         fill->setStyleSheet(QString("QFrame{background:%1; border-radius:4px; border:none;}").arg(c.name()));
-        fill->setGeometry(1, 1, qMax(2, int((barBg->width() - 2) * ratio)), 8);
+        fill->setGeometry(1, 1, 2, 8); // 初始为 0，随动效生长
         barBg->installEventFilter(this);
         m_barFills.append({fill, ratio});
+        QElapsedTimer t;
+        t.start();
+        m_barTimers.append(t);
         row->addWidget(barBg);
         m_barList->addWidget(rowWidget);
         Q_UNUSED(stateText)
+    }
+    // 启动进度条生长动画（500ms ease-out）
+    if (!m_barFills.isEmpty() && !m_barAnimTimer.isValid()) {
+        m_barAnimTimer.start();
+        animateBars();
+    } else {
+        m_barAnimTimer.restart();
+        animateBars();
     }
     // 状态图例（富文本彩色圆点）
     m_barLegend->setText(tr(
@@ -417,6 +430,22 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* ev) {
         }
     }
     return QMainWindow::eventFilter(obj, ev);
+}
+
+void MainWindow::animateBars() {
+    // 500ms ease-out 生长：w = fullW * ratio * ease(t)
+    const qint64 elapsed = m_barAnimTimer.elapsed();
+    const double t = qMin(1.0, elapsed / 500.0);
+    const double ease = 1.0 - std::pow(1.0 - t, 3.0);
+    bool done = true;
+    for (int i = 0; i < m_barFills.size(); ++i) {
+        auto& bf = m_barFills[i];
+        QWidget* bg = bf.fill->parentWidget();
+        const int fullW = qMax(2, int((bg->width() - 2) * bf.ratio * ease));
+        if (bf.fill->width() != fullW) bf.fill->resize(fullW, bf.fill->height());
+        if (t < 1.0) done = false;
+    }
+    if (!done) QTimer::singleShot(16, this, &MainWindow::animateBars);
 }
 
 void MainWindow::openDiskInAnalyzer(int row, int column) {
