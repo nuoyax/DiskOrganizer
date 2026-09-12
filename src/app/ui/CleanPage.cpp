@@ -1,10 +1,13 @@
 #include "CleanPage.h"
 #include "Charts.h"
 #include "Icons.h"
+#include "FlatStyle.h"
 #include "util/SizeFormatter.h"
 #include "SettingsDialog.h"
 #include "services/Logger.h"
 #include <QCheckBox>
+#include <QFrame>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -25,36 +28,180 @@ constexpr int kRolePath     = Qt::UserRole;      // 完整路径
 constexpr int kRoleSize     = Qt::UserRole + 1;  // 字节数
 constexpr int kRoleCategory = Qt::UserRole + 2;  // 类别枚举值（存于类别节点）
 constexpr int kRoleCautious = Qt::UserRole + 3;  // 是否"谨慎"项
+
+// 分类卡配色（参照 clean-light：teal/indigo/amber/rose/slate/purple 循环）
+struct CardSkin { const char* icon; int bgR, bgG, bgB; int fgR, fgG, fgB; };
+CardSkin cardSkin(int i) {
+    static const CardSkin skins[] = {
+        {Icons::P::trash,    0xF0, 0xFD, 0xFA, 0x0D, 0x94, 0x88}, // teal
+        {Icons::P::broom,    0xEE, 0xF2, 0xFF, 0x4B, 0x41, 0xE1}, // indigo
+        {Icons::P::drive,    0xFF, 0xFB, 0xEB, 0xB4, 0x53, 0x09}, // amber
+        {Icons::P::trash,    0xFF, 0xF1, 0xF2, 0xE1, 0x1D, 0x48}, // rose
+        {Icons::P::folder,   0xF8, 0xFA, 0xFC, 0x47, 0x55, 0x69}, // slate
+        {Icons::P::disk,     0xFA, 0xF5, 0xFF, 0x93, 0x33, 0xEA}, // purple
+    };
+    return skins[i % 6];
 }
+
+// 小圆角彩色图标块
+QLabel* iconChip(const char* iconPath, const CardSkin& skin, int size = 40) {
+    auto* l = new QLabel;
+    l->setPixmap(Icons::tinted(QString::fromUtf8(iconPath),
+                               QColor(skin.fgR, skin.fgG, skin.fgB), size * 5 / 10).pixmap(size * 5 / 10, size * 5 / 10));
+    l->setFixedSize(size, size);
+    l->setAlignment(Qt::AlignCenter);
+    l->setStyleSheet(QString("background:#%1%2%3;border-radius:%4px;")
+                         .arg(skin.bgR, 2, 16, QChar('0'))
+                         .arg(skin.bgG, 2, 16, QChar('0'))
+                         .arg(skin.bgB, 2, 16, QChar('0'))
+                         .arg(size * 3 / 10));
+    return l;
+}
+} // namespace
 
 CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
+    root->setContentsMargins(24, 18, 24, 18);
     root->setSpacing(12);
 
-    auto* title = new QLabel(tr("扫描并清理系统垃圾文件，按类别勾选需要处理的项目"));
-    title->setStyleSheet("color:#6C7A77; background:transparent;");
-    root->addWidget(title);
+    // ===== 页头：大标题 + 状态 pill + 副标题 =====
+    auto* headRow = new QHBoxLayout;
+    auto* titleCol = new QVBoxLayout;
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(10);
+    auto* title = new QLabel(tr("垃圾清理"));
+    title->setStyleSheet("font-size:24px; font-weight:800; color:#181445; background:transparent;");
+    m_headStatus = new QLabel(tr("尚未扫描"));
+    m_headStatus->setStyleSheet(
+        "QLabel{padding:3px 10px; border-radius:12px; background:#E6F2EF; color:#006B5F;"
+        "font-size:12px; font-weight:600; background:transparent;}");
+    // 上面的 background:transparent 会覆盖，改用双属性写法
+    m_headStatus->setStyleSheet(
+        "padding:3px 10px; border-radius:12px; background-color:#E6F2EF; color:#006B5F;"
+        "font-size:12px; font-weight:600;");
+    titleRow->addWidget(title);
+    titleRow->addWidget(m_headStatus);
+    titleRow->addStretch();
+    auto* subtitle = new QLabel(tr("精准定位系统冗余文件、应用及网页缓存、日志与卸载残留，安全释放宝贵磁盘空间。"));
+    subtitle->setStyleSheet("color:#6C7A77; background:transparent;");
+    titleCol->addLayout(titleRow);
+    titleCol->addWidget(subtitle);
+    headRow->addLayout(titleCol, 1);
 
-    // 分类复选框
-    auto* catRow = new QHBoxLayout;
-    catRow->setSpacing(18);
+    auto* whitelistBtn = new QPushButton(tr("排除设置"));
+    whitelistBtn->setProperty("class", "secondary");
+    connect(whitelistBtn, &QPushButton::clicked, this, &CleanPage::openSettings);
+    headRow->addWidget(whitelistBtn);
+    root->addLayout(headRow);
+
+    // ===== Hero 汇总卡 =====
+    auto* hero = new QFrame;
+    hero->setProperty("class", "card");
+    auto* hv = new QVBoxLayout(hero);
+    hv->setContentsMargins(20, 16, 20, 16);
+    hv->setSpacing(10);
+    auto* heroTop = new QHBoxLayout;
+    heroTop->setSpacing(16);
+    heroTop->addWidget(iconChip(Icons::P::broom, {Icons::P::broom, 0xE6, 0xF2, 0xEF, 0x00, 0x6B, 0x5F}, 56));
+    auto* heroText = new QVBoxLayout;
+    m_heroState = new QLabel(tr("尚未扫描，点击「开始扫描」定位可清理垃圾"));
+    m_heroState->setStyleSheet("color:#6C7A77; background:transparent;");
+    auto* numRow = new QHBoxLayout;
+    numRow->setSpacing(6);
+    m_heroTotal = new QLabel("0");
+    m_heroTotal->setStyleSheet("font-size:32px; font-weight:800; color:#181445; background:transparent;");
+    auto* gb = new QLabel("GB");
+    gb->setStyleSheet("font-size:16px; font-weight:700; color:#006B5F; background:transparent;");
+    auto* gbHint = new QLabel(tr("可安全释放"));
+    gbHint->setStyleSheet("color:#6C7A77; background:transparent;");
+    numRow->addWidget(m_heroTotal);
+    numRow->addWidget(gb);
+    numRow->addWidget(gbHint);
+    numRow->addStretch();
+    heroText->addWidget(m_heroState);
+    heroText->addLayout(numRow);
+    heroTop->addLayout(heroText, 1);
+
+    // 全选 pill + 回收站开关
+    auto* selectAll = new QPushButton(tr("全选建议类别"));
+    selectAll->setProperty("class", "secondary");
+    connect(selectAll, &QPushButton::clicked, this, [this] {
+        for (auto& c : m_cards) if (c.check) c.check->setChecked(true);
+    });
+    heroTop->addWidget(selectAll);
+    hv->addLayout(heroTop);
+    hv->addWidget(m_pie = new PieChart, 0);
+    m_pie->setMaximumHeight(140);
+    root->addWidget(hero);
+
+    // ===== 分类卡片 grid =====
+    auto* catHeader = new QHBoxLayout;
+    auto* catTitle = new QLabel(tr("清理项目分类推荐"));
+    catTitle->setStyleSheet("font-size:16px; font-weight:700; color:#181445; background:transparent;");
+    auto* catHint = new QLabel(tr("可根据需要单独取消某项勾选"));
+    catHint->setStyleSheet("color:#6C7A77; background:transparent; font-size:12px;");
+    catHeader->addWidget(catTitle);
+    catHeader->addStretch();
+    catHeader->addWidget(catHint);
+    root->addLayout(catHeader);
+
+    auto* grid = new QGridLayout;
+    grid->setSpacing(12);
     const char* names[12] = {
         "临时文件", "回收站", "浏览器缓存", "系统日志", "Windows 更新缓存",
         "缩略图缓存", "预读文件", "转储/错误报告", "安装程序缓存", "空文件夹",
         "零字节文件", "自定义规则"
     };
-    for (int i = 0; i <= int(CleanCategory::CustomRules); ++i) {
-        m_catChecks[i] = new QCheckBox(QString::fromUtf8(names[i]));
-        m_catChecks[i]->setChecked(i < 7);           // 默认勾选常用类别
-        catRow->addWidget(m_catChecks[i]);
-    }
-    catRow->addStretch();
-    root->addLayout(catRow);
+    const char* tags[12] = {
+        "建议清理", "一键清空", "安全释放", "建议清理", "占用极大",
+        "安全清理", "建议清理", "安全清理", "谨慎清理", "谨慎清理",
+        "谨慎清理", "自定义"
+    };
+    const int nCats = int(CleanCategory::CustomRules) + 1;
+    for (int i = 0; i < nCats; ++i) {
+        auto& cc = m_cards[i];
+        cc.card = new QFrame;
+        cc.card->setProperty("class", "card");
+        auto* cv = new QVBoxLayout(cc.card);
+        cv->setContentsMargins(14, 12, 14, 12);
+        cv->setSpacing(8);
+        auto* top = new QHBoxLayout;
+        top->setSpacing(10);
+        top->addWidget(iconChip(cardSkin(i).icon, cardSkin(i)));
+        auto* textCol = new QVBoxLayout;
+        auto* name = new QLabel(QString::fromUtf8(names[i]));
+        name->setStyleSheet("font-weight:700; color:#181445; background:transparent;");
+        cc.countLabel = new QLabel(tr("未扫描"));
+        cc.countLabel->setStyleSheet("color:#6C7A77; font-size:11px; background:transparent;");
+        textCol->addWidget(name);
+        textCol->addWidget(cc.countLabel);
+        top->addLayout(textCol, 1);
+        cc.check = new QCheckBox;
+        cc.check->setChecked(i < 7);
+        connect(cc.check, &QCheckBox::toggled, this, [this] { updateSummary(); });
+        top->addWidget(cc.check);
+        cv->addLayout(top);
 
-    // 中部：树 + 饼图
-    auto* mid = new QHBoxLayout;
-    mid->setSpacing(12);
+        auto* bottom = new QHBoxLayout;
+        cc.tagLabel = new QLabel(QString::fromUtf8(tags[i]));
+        cc.tagLabel->setStyleSheet(
+            "padding:2px 8px; border-radius:8px; background-color:#F0FDFA; color:#0F766E;"
+            "font-size:11px; font-weight:600;");
+        cc.sizeLabel = new QLabel("--");
+        cc.sizeLabel->setStyleSheet("font-size:18px; font-weight:800; color:#181445; background:transparent;");
+        bottom->addWidget(cc.tagLabel);
+        bottom->addStretch();
+        bottom->addWidget(cc.sizeLabel);
+        cv->addLayout(bottom);
+        grid->addWidget(cc.card, i / 3, i % 3);
+    }
+    root->addLayout(grid);
+
+    // ===== 明细树卡 =====
+    auto* treeCard = new QFrame;
+    treeCard->setProperty("class", "card");
+    auto* tv = new QVBoxLayout(treeCard);
+    tv->setContentsMargins(8, 8, 8, 8);
     m_tree = new QTreeWidget;
     m_tree->setHeaderLabels({tr("文件 / 类别"), tr("大小"), tr("说明")});
     m_tree->setColumnWidth(0, 420);
@@ -62,39 +209,29 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     m_tree->setUniformRowHeights(true);
     m_tree->header()->setStretchLastSection(true);
     connect(m_tree, &QTreeWidget::itemChanged, this, &CleanPage::onItemChanged);
-    mid->addWidget(m_tree, 3);
+    tv->addWidget(m_tree);
+    root->addWidget(treeCard, 1);
 
-    m_pie = new PieChart;
-    m_pie->setMinimumWidth(300);
-    mid->addWidget(m_pie, 1);
-    root->addLayout(mid, 1);
-
-    // 底部
-    m_summary = new QLabel(tr("尚未扫描"));
-    m_summary->setStyleSheet("color:#6C7A77; background:transparent;");
+    // ===== 底部操作条 =====
     m_progress = new QProgressBar;
     m_progress->setFixedHeight(10);
     m_progress->setTextVisible(false);
 
     auto* btnRow = new QHBoxLayout;
-    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"));
-    m_cleanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::broom), QColor("white")), tr("清理选中项"));
-    m_cleanBtn->setProperty("class", "secondary");
+    m_summary = new QLabel(tr("尚未扫描"));
+    m_summary->setStyleSheet("color:#6C7A77; background:transparent;");
+    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("重新扫描"));
+    m_cleanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::broom), QColor("white")), tr("一键立即清理"));
     m_cleanBtn->setEnabled(false);
     auto* recycle = new QCheckBox(tr("删除到回收站"));
     recycle->setChecked(true);
     connect(recycle, &QCheckBox::toggled, this, [this](bool on) { m_recycleBin = on; });
-    auto* settingsBtn = new QPushButton(tr("排除设置"));
-    settingsBtn->setProperty("class", "secondary");
-    connect(settingsBtn, &QPushButton::clicked, this, &CleanPage::openSettings);
 
+    btnRow->addWidget(m_summary, 1);
+    btnRow->addWidget(recycle);
     btnRow->addWidget(m_scanBtn);
     btnRow->addWidget(m_cleanBtn);
-    btnRow->addWidget(recycle);
-    btnRow->addStretch();
-    btnRow->addWidget(settingsBtn);
     root->addWidget(m_progress);
-    root->addWidget(m_summary);
     root->addLayout(btnRow);
 
     connect(m_scanBtn, &QPushButton::clicked, this, &CleanPage::doScan);
@@ -124,18 +261,43 @@ QString CleanPage::categoryDisplayName(CleanCategory cat) {
     return {};
 }
 
+void CleanPage::rebuildCategoryCards() {
+    // 扫描结果同步到分类卡（数量 + 大小）
+    QMap<int, QPair<int, qint64>> byCat; // cat → (count, bytes)
+    for (const auto& it : m_items) {
+        auto& agg = byCat[int(it.category)];
+        agg.first += 1;
+        agg.second += it.size;
+    }
+    const int nCats = int(CleanCategory::CustomRules) + 1;
+    for (int i = 0; i < nCats; ++i) {
+        auto& cc = m_cards[i];
+        if (!cc.card) continue;
+        if (byCat.contains(i)) {
+            cc.countLabel->setText(tr("%1 项").arg(byCat[i].first));
+            cc.sizeLabel->setText(formatSize(byCat[i].second));
+            const bool cautious = !byCat.contains(i) || i >= 8; // 尾部类别标记谨慎
+            Q_UNUSED(cautious)
+        } else {
+            cc.countLabel->setText(tr("无项目"));
+            cc.sizeLabel->setText("0");
+        }
+    }
+}
+
 void CleanPage::doScan() {
     m_scanBtn->setEnabled(false);
     m_cleanBtn->setEnabled(false);
     m_tree->clear();
     m_items.clear();
+    m_headStatus->setText(tr("正在扫描……"));
+    m_heroState->setText(tr("正在扫描……"));
     m_summary->setText(tr("正在扫描……"));
     m_progress->setRange(0, 0);
 
-    const int nCats = int(CleanCategory::CustomRules) + 1;
     QList<CleanCategory> cats;
-    for (int i = 0; i < nCats; ++i)
-        if (m_catChecks[i]->isChecked())
+    for (int i = 0; i <= int(CleanCategory::CustomRules); ++i)
+        if (m_cards[i].check && m_cards[i].check->isChecked())
             cats.append(CleanCategory(i));
 
     if (cats.isEmpty()) {
@@ -152,6 +314,7 @@ void CleanPage::doScan() {
             m_progress->setRange(0, 1);
             m_progress->setValue(1);
             m_items = found;
+            rebuildCategoryCards();
 
             m_tree->blockSignals(true);
             m_tree->clear();
@@ -187,6 +350,8 @@ void CleanPage::doScan() {
             m_tree->blockSignals(false);
             m_tree->expandToDepth(0);
 
+            m_headStatus->setText(tr("智能扫描已完成"));
+            m_heroState->setText(tr("扫描完成 · 发现 %1 个可清理项").arg(m_items.size()));
             updateSummary();
             m_scanBtn->setEnabled(true);
             m_cleanBtn->setEnabled(!m_items.isEmpty());
@@ -231,7 +396,14 @@ void CleanPage::updateSummary() {
         if (catTotal > 0)
             slices.append({cat->text(0), double(catTotal)});
     }
-    m_summary->setText(tr("已选 %1 项，共 %2").arg(count).arg(formatSize(total)));
+    // hero 大数字（GB 显示，与稿一致保留两位）
+    const double gb = total / (1024.0 * 1024.0 * 1024.0);
+    m_heroTotal->setText(gb >= 1 ? QString::number(gb, 'f', 2) : QString::number(total / (1024.0 * 1024.0), 'f', 0) + " MB");
+    if (gb < 1) {
+        // MB 情况下隐藏 GB 单位观感——直接把 MB 并入数字即可（简单起见仍显示 GB 列）
+        m_heroTotal->setText(QString::number(total / (1024.0 * 1024.0), 'f', 1));
+    }
+    m_summary->setText(tr("已勾选 %1 项 · 预计释放 %2").arg(count).arg(formatSize(total)));
     m_pie->setData(slices);
 }
 
