@@ -7,13 +7,14 @@ class QLabel;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
+class QComboBox;
+class QButtonGroup;
 
 namespace DiskOrganizer {
 
 class SearchableComboBox;
 
-// 重复文件查找页：指定盘符整卷扫描（NTFS 走 MFT 快速路径）
-// 按 duplicate-light 稿重构：页头 + 指标卡 + 过滤行 + 组卡片列表 + 底部操作条
 class DuplicatePage : public PageBase {
     Q_OBJECT
 public:
@@ -22,23 +23,51 @@ public:
 private slots:
     void doFind();
     void keepOldest();
+    void keepNewest();
+    void keepShortestPath();
     void deleteSelected();
 
 private:
     void resetUiAfterCancel();
+    void rebuildGroupCards();
+    void updateFooter();
+    QStringList selectedPaths() const;
+    bool passTypeFilter(const QString& path) const;
+    bool passSizeFilter(qint64 size) const;
 
     SearchableComboBox* m_driveCombo = nullptr;
+    QComboBox* m_sizeFilter = nullptr;
+    QButtonGroup* m_typeGroup = nullptr;
     QPushButton* m_findBtn = nullptr;
-    QListWidget* m_list = nullptr;
+    QScrollArea* m_scroll = nullptr;
+    QWidget* m_cardHost = nullptr;
     QProgressBar* m_progress = nullptr;
     QLabel* m_summary = nullptr;
-    QLabel* m_headStatus = nullptr;   // 页头状态 pill
-    QLabel* m_groupsMetric = nullptr; // 指标卡：重复组
-    QLabel* m_wastedMetric = nullptr; // 指标卡：可释放
-    QPushButton* m_keepBtn = nullptr;
+    QLabel* m_headStatus = nullptr;
+    QLabel* m_groupsMetric = nullptr;
+    QLabel* m_wastedMetric = nullptr;
+    QPushButton* m_keepOldestBtn = nullptr;
+    QPushButton* m_keepNewestBtn = nullptr;
+    QPushButton* m_keepShortBtn = nullptr;
     QPushButton* m_deleteBtn = nullptr;
     std::atomic<bool> m_cancelled{false};
     bool m_finding = false;
+
+    struct DupRow {
+        QString path;
+        qint64 size = 0;
+        qint64 modified = 0;
+        bool keepSuggested = false;
+        bool checked = false;
+    };
+    struct DupGroupUi {
+        QString name;
+        QString hashPrefix;
+        qint64 fileSize = 0;
+        qint64 wasted = 0;
+        QList<DupRow> rows;
+    };
+    QList<DupGroupUi> m_groups;
 };
 
 } // namespace DiskOrganizer

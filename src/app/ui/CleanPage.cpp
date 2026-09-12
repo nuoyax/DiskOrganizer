@@ -6,6 +6,7 @@
 #include "SettingsDialog.h"
 #include "services/Logger.h"
 #include <QCheckBox>
+#include <QDialog>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -15,6 +16,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -62,7 +64,7 @@ QLabel* iconChip(const char* iconPath, const CardSkin& skin, int size = 40) {
 
 CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(24, 18, 24, 18);
+    root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(12);
 
     // ===== 页头：大标题 + 状态 pill + 副标题 =====
@@ -123,12 +125,12 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     numRow->setSpacing(6);
     m_heroTotal = new QLabel("0");
     m_heroTotal->setStyleSheet("font-size:32px; font-weight:800; color:#181445; background:transparent;");
-    auto* gb = new QLabel("GB");
-    gb->setStyleSheet("font-size:16px; font-weight:700; color:#006B5F; background:transparent;");
+    m_heroUnit = new QLabel(QStringLiteral("MB"));
+    m_heroUnit->setStyleSheet("font-size:16px; font-weight:700; color:#006B5F; background:transparent;");
     auto* gbHint = new QLabel(tr("可安全释放"));
     gbHint->setStyleSheet("color:#6C7A77; background:transparent;");
     numRow->addWidget(m_heroTotal);
-    numRow->addWidget(gb);
+    numRow->addWidget(m_heroUnit);
     numRow->addWidget(gbHint);
     numRow->addStretch();
     heroText->addWidget(m_heroState);
@@ -240,7 +242,12 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     m_cleanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::broom), QColor("white")), tr("一键立即清理"));
     m_cleanBtn->setEnabled(false);
     auto* recycle = new QCheckBox(tr("删除到回收站"));
-    recycle->setChecked(true);
+    {
+        QSettings s(QSettings::IniFormat, QSettings::UserScope, "DiskOrganizer", "DiskOrganizer");
+        m_recycleBin = s.value("clean/toRecycleBin", true).toBool();
+    }
+    recycle->setChecked(m_recycleBin);
+    m_recycleCheck = recycle;
     connect(recycle, &QCheckBox::toggled, this, [this](bool on) { m_recycleBin = on; });
 
     btnRow->addWidget(m_summary, 1);
@@ -256,7 +263,11 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
 
 void CleanPage::openSettings() {
     SettingsDialog dlg(this);
-    dlg.exec();
+    if (dlg.exec() == QDialog::Accepted && m_recycleCheck) {
+        QSettings s(QSettings::IniFormat, QSettings::UserScope, "DiskOrganizer", "DiskOrganizer");
+        m_recycleBin = s.value("clean/toRecycleBin", true).toBool();
+        m_recycleCheck->setChecked(m_recycleBin);
+    }
 }
 
 QString CleanPage::categoryDisplayName(CleanCategory cat) {
@@ -364,7 +375,7 @@ void CleanPage::doScan() {
                 node->setText(1, formatSize(total));
             }
             m_tree->blockSignals(false);
-            m_tree->expandToDepth(0);
+            m_tree->collapseAll();
 
             m_headStatus->setText(tr("智能扫描已完成"));
             m_heroState->setText(tr("扫描完成 · 发现 %1 个可清理项").arg(m_items.size()));
@@ -409,12 +420,22 @@ void CleanPage::updateSummary() {
                 ? QString("%1 · %2 项").arg(formatSize(catTotal)).arg(catCount)
                 : tr("已全不选"));
     }
-    // hero 大数字（GB 显示，与稿一致保留两位）
-    const double gb = total / (1024.0 * 1024.0 * 1024.0);
-    m_heroTotal->setText(gb >= 1 ? QString::number(gb, 'f', 2) : QString::number(total / (1024.0 * 1024.0), 'f', 0) + " MB");
-    if (gb < 1) {
-        // MB 情况下隐藏 GB 单位观感——直接把 MB 并入数字即可（简单起见仍显示 GB 列）
-        m_heroTotal->setText(QString::number(total / (1024.0 * 1024.0), 'f', 1));
+    // hero 大数字 + 单位（与底部 formatSize 一致，避免 GB/MB 错配）
+    const double kb = 1024.0;
+    const double mb = kb * 1024.0;
+    const double gb = mb * 1024.0;
+    if (total >= qint64(gb)) {
+        m_heroTotal->setText(QString::number(total / gb, 'f', 2));
+        m_heroUnit->setText(QStringLiteral("GB"));
+    } else if (total >= qint64(mb)) {
+        m_heroTotal->setText(QString::number(total / mb, 'f', 1));
+        m_heroUnit->setText(QStringLiteral("MB"));
+    } else if (total >= qint64(kb)) {
+        m_heroTotal->setText(QString::number(total / kb, 'f', 1));
+        m_heroUnit->setText(QStringLiteral("KB"));
+    } else {
+        m_heroTotal->setText(QString::number(total));
+        m_heroUnit->setText(QStringLiteral("B"));
     }
     m_summary->setText(tr("已勾选 %1 项 · 预计释放 %2").arg(count).arg(formatSize(total)));
 }

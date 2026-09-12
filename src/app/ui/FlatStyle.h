@@ -122,6 +122,8 @@ QPushButton.navBtn {
 QPushButton.navBtn:hover { background: #2E2A63; color: #FFFFFF; }
 QPushButton.navBtn:checked {
     background: #37326E; color: #FFFFFF;
+    border-left: 3px solid #14B8A6;
+    padding-left: 13px;
 }
 
 /* ===== 内容卡片 ===== */

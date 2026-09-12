@@ -1,5 +1,4 @@
 #include "BigFilePage.h"
-#include "FlowLayout.h"
 #include "Icons.h"
 #include "SearchableComboBox.h"
 #include "FlatStyle.h"
@@ -9,21 +8,28 @@
 #include "services/BigFileFinder.h"
 #include "services/Logger.h"
 #include "services/CleanerService.h"
+#include "services/ReportService.h"
 #include "Charts.h"
 
 #include <QMessageBox>
 #include <QFrame>
 #include <QItemSelectionModel>
+#include <QItemSelection>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHash>
+#include <QMap>
 #include <QSignalBlocker>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
+#include <QFileDialog>
 #include <QTimer>
+#include <QUrl>
 #include <functional>
-#include <QComboBox>
 #include <QFileInfo>
+#include <QGridLayout>
+#include <QSizePolicy>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -59,188 +65,276 @@ public:
         return data(Qt::UserRole).toLongLong() < other.data(Qt::UserRole).toLongLong();
     }
 };
-}
+} // namespace
 
 BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(24, 18, 24, 18);
-    root->setSpacing(12);
+    // contentArea 已有留白，页内不再叠外边距
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(14);
 
-    // ===== 页头：大标题 + 副标题 + 指标卡（发现大文件数）=====
+    auto fieldLabel = [](const QString& text, QWidget* parent) {
+        auto* lab = new QLabel(text, parent);
+        lab->setStyleSheet(
+            "font-size:12px; font-weight:600; color:#6C7A77; background:transparent;");
+        return lab;
+    };
+
+    // ===== 页头：标题左 + 导出/扫描右 =====
     auto* head = new QHBoxLayout;
+    head->setSpacing(12);
     auto* headCol = new QVBoxLayout;
+    headCol->setSpacing(4);
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(10);
-    auto* title = new QLabel(tr("大文件"));
-    title->setStyleSheet("font-size:24px; font-weight:800; color:#181445; background:transparent;");
-    m_headStatus = new QLabel(tr("扫描引擎已就绪"));
+    auto* title = new QLabel(tr("大文件"), this);
+    title->setStyleSheet(
+        "font-size:24px; font-weight:800; color:#181445; background:transparent;");
+    m_headStatus = new QLabel(tr("扫描引擎已就绪"), this);
     m_headStatus->setStyleSheet(
         "padding:3px 10px; border-radius:12px; background-color:#E6F2EF; color:#006B5F;"
         "font-size:12px; font-weight:600;");
     titleRow->addWidget(title);
     titleRow->addWidget(m_headStatus);
     titleRow->addStretch();
-    auto* subtitle = new QLabel(tr("扫描磁盘上的大文件与旧文件，结果按磁盘分类，点击表头自由排序"));
+    auto* subtitle = new QLabel(
+        tr("扫描磁盘上的大文件与旧文件，结果按磁盘分类，点击表头自由排序"), this);
     subtitle->setStyleSheet("color:#6C7A77; background:transparent;");
     headCol->addLayout(titleRow);
     headCol->addWidget(subtitle);
     head->addLayout(headCol, 1);
 
-    // 指标卡：发现大文件数（white card + indigo 图标块）
-    {
+    m_exportBtn = new QPushButton(tr("导出清单"), this);
+    m_exportBtn->setProperty("class", "secondary");
+    m_exportBtn->setEnabled(false);
+    m_scanBtn = new QPushButton(
+        Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")),
+        tr("开始扫描"), this);
+    head->addWidget(m_exportBtn, 0, Qt::AlignTop);
+    head->addWidget(m_scanBtn, 0, Qt::AlignTop);
+    root->addLayout(head);
+
+    // ===== 三列指标卡对齐 =====
+    auto* metrics = new QHBoxLayout;
+    metrics->setSpacing(12);
+    auto makeMetric = [this](const char* iconPath, const QColor& tint, const QColor& bg,
+                             const QString& cap) -> QLabel* {
         auto* card = new QFrame(this);
         card->setProperty("class", "card");
         auto* h = new QHBoxLayout(card);
-        h->setContentsMargins(14, 10, 14, 10);
+        h->setContentsMargins(14, 12, 14, 12);
         h->setSpacing(10);
         auto* chip = new QLabel(card);
-        const int px = 18;
-        chip->setPixmap(Icons::tinted(QString::fromUtf8(Icons::P::bigfile),
-                                      QColor(0x4B, 0x41, 0xE1), px).pixmap(px, px));
-        chip->setFixedSize(34, 34);
+        chip->setFixedSize(36, 36);
         chip->setAlignment(Qt::AlignCenter);
-        chip->setStyleSheet("background:#EEF2FF; border-radius:8px;");
+        chip->setPixmap(Icons::tinted(QString::fromUtf8(iconPath), tint, 18).pixmap(18, 18));
+        chip->setStyleSheet(QString("background:%1; border-radius:10px;").arg(bg.name()));
         auto* col = new QVBoxLayout;
-        col->setSpacing(0);
-        auto* cap = new QLabel(tr("发现大文件数"), card);
-        cap->setStyleSheet("font-size:11px; color:#6C7A77; background:transparent;");
-        m_countMetric = new QLabel("--", card);
-        m_countMetric->setStyleSheet("font-size:15px; font-weight:800; color:#181445; background:transparent;");
-        col->addWidget(cap);
-        col->addWidget(m_countMetric);
+        col->setSpacing(2);
+        auto* c = new QLabel(cap, card);
+        c->setStyleSheet("font-size:11px; color:#6C7A77; background:transparent;");
+        auto* v = new QLabel(QStringLiteral("--"), card);
+        v->setStyleSheet(
+            "font-size:18px; font-weight:800; color:#181445; background:transparent;");
+        col->addWidget(c);
+        col->addWidget(v);
         h->addWidget(chip);
         h->addLayout(col, 1);
-        head->addWidget(card);
-    }
-    root->addLayout(head);
+        return v;
+    };
+    m_countMetric = makeMetric(Icons::P::bigfile, QColor(0x4B, 0x41, 0xE1),
+                               QColor(0xEE, 0xF2, 0xFF), tr("发现大文件数"));
+    metrics->addWidget(m_countMetric->parentWidget(), 1);
+    m_totalMetric = makeMetric(Icons::P::disk, QColor(0x0D, 0x94, 0x88),
+                               QColor(0xF0, 0xFD, 0xFA), tr("累计占用总计"));
+    metrics->addWidget(m_totalMetric->parentWidget(), 1);
+    m_selectedMetric = makeMetric(Icons::P::trash, QColor(0xE1, 0x1D, 0x48),
+                                  QColor(0xFF, 0xF1, 0xF2), tr("已筛选选中容量"));
+    metrics->addWidget(m_selectedMetric->parentWidget(), 1);
+    root->addLayout(metrics);
 
-    // 过滤条件行（流式布局，窄窗口自动换行）
+    // ===== 筛选卡：标签上行、控件下行，四列网格对齐 =====
+    auto* filterCard = new QFrame(this);
+    filterCard->setProperty("class", "card");
+    auto* filterLay = new QVBoxLayout(filterCard);
+    filterLay->setContentsMargins(16, 14, 16, 14);
+    filterLay->setSpacing(10);
+
     m_driveCombo = new SearchableComboBox;
-    // 磁盘项统一用硬盘图标（灰蓝色），与"全部磁盘"的 disk 图标呼应
-    const QIcon driveIcon = Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
-    const QIcon allIcon = Icons::tinted(QString::fromUtf8(Icons::P::disk), QColor(0x4B, 0x41, 0xE1), 18);
+    const QIcon driveIcon =
+        Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
+    const QIcon allIcon =
+        Icons::tinted(QString::fromUtf8(Icons::P::disk), QColor(0x4B, 0x41, 0xE1), 18);
     m_driveCombo->addItem(allIcon, tr("全部磁盘"), QString());
     for (const auto& d : enumerateDisks())
-        m_driveCombo->addItem(driveIcon, QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
-            ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
-    m_driveCombo->setFixedWidth(260);
-    // 目录级扫描：可输入具体目录（如 C:/Users），留空 = 整盘扫描
-    m_dirEdit = new QLineEdit;
-    m_dirEdit->setPlaceholderText(tr("目录（可选，如 C:/Users，留空=整盘）"));
-    m_dirEdit->setFixedWidth(260);
-    m_driveCombo->setFixedWidth(260);
-    // 大小阈值：预设下拉（可搜索复用），单位 MB；起步 100MB（大文件定位场景）
-    m_sizeCombo = new SearchableComboBox;
-    m_sizeCombo->setFixedWidth(150);
-    m_sizeCombo->setToolTip(tr("只显示大于该大小的文件"));
-    m_sizeCombo->addItem("100 MB", 100);
-    m_sizeCombo->addItem("500 MB", 500);
-    m_sizeCombo->addItem("1 GB", 1024);
-    m_sizeCombo->addItem("5 GB", 5 * 1024);
-    m_sizeCombo->addItem("10 GB", 10 * 1024);
-    m_sizeCombo->setCurrentIndex(0);   // 默认 100MB
+        m_driveCombo->addItem(
+            driveIcon,
+            QString("%1 (%2)").arg(d.driveLetter,
+                                   d.volumeLabel.isEmpty() ? QStringLiteral("本地磁盘")
+                                                          : d.volumeLabel),
+            d.driveLetter);
+    m_driveCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_driveCombo->setMinimumHeight(36);
 
-    // 扩展名可搜索下拉：覆盖常见所有类型 + 可输入子串过滤
+    m_dirEdit = new QLineEdit;
+    m_dirEdit->setPlaceholderText(tr("留空 = 整盘扫描，如 C:/Users"));
+    m_dirEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_dirEdit->setMinimumHeight(36);
+    auto* browseBtn = new QPushButton(tr("浏览…"), filterCard);
+    browseBtn->setProperty("class", "secondary");
+    browseBtn->setFixedWidth(72);
+    browseBtn->setMinimumHeight(36);
+    connect(browseBtn, &QPushButton::clicked, this, [this] {
+        const QString dir =
+            QFileDialog::getExistingDirectory(this, tr("选择扫描目录"), m_dirEdit->text());
+        if (!dir.isEmpty())
+            m_dirEdit->setText(QDir::fromNativeSeparators(dir));
+    });
+    auto* dirRow = new QWidget(filterCard);
+    auto* dirLay = new QHBoxLayout(dirRow);
+    dirLay->setContentsMargins(0, 0, 0, 0);
+    dirLay->setSpacing(8);
+    dirLay->addWidget(m_dirEdit, 1);
+    dirLay->addWidget(browseBtn);
+
+    m_sizeCombo = new SearchableComboBox;
+    m_sizeCombo->setToolTip(tr("只显示大于该大小的文件"));
+    m_sizeCombo->addItem(tr("> 100 MB"), 100);
+    m_sizeCombo->addItem(tr("> 500 MB"), 500);
+    m_sizeCombo->addItem(tr("> 1 GB"), 1024);
+    m_sizeCombo->addItem(tr("> 5 GB"), 5 * 1024);
+    m_sizeCombo->addItem(tr("> 10 GB"), 10 * 1024);
+    m_sizeCombo->setCurrentIndex(0);
+    m_sizeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_sizeCombo->setMinimumHeight(36);
+
     m_extCombo = new SearchableComboBox;
-    m_extCombo->setFixedWidth(260);
     m_extCombo->addItem(tr("全部类型"), QString());
-    const struct { const char* name; const char* exts; } extGroups[] = {
-        {"压缩包",  ".zip .7z .rar .tar .gz .bz2 .xz .iso .cab .tgz"},
-        {"视频",    ".mp4 .mkv .avi .mov .wmv .flv .webm .m4v .mpg .rmvb .ts"},
-        {"音频",    ".mp3 .wav .flac .aac .ogg .wma .m4a .ape .mid"},
-        {"图片",    ".jpg .jpeg .png .gif .bmp .webp .svg .tif .tiff .raw .ico .heic"},
-        {"文档",    ".pdf .doc .docx .xls .xlsx .ppt .pptx .txt .md .csv .odt"},
+    const struct {
+        const char* name;
+        const char* exts;
+    } extGroups[] = {
+        {"压缩包", ".zip .7z .rar .tar .gz .bz2 .xz .iso .cab .tgz"},
+        {"视频", ".mp4 .mkv .avi .mov .wmv .flv .webm .m4v .mpg .rmvb .ts"},
+        {"音频", ".mp3 .wav .flac .aac .ogg .wma .m4a .ape .mid"},
+        {"图片", ".jpg .jpeg .png .gif .bmp .webp .svg .tif .tiff .raw .ico .heic"},
+        {"文档", ".pdf .doc .docx .xls .xlsx .ppt .pptx .txt .md .csv .odt"},
         {"程序/库", ".exe .dll .lib .so .apk .msi .bin .sys .ocx .jar"},
-        {"代码",    ".cpp .h .hpp .c .cs .py .java .js .ts .html .css .json .xml .sql .go .rs"},
-        {"开发环境",".pdb .idb .obj .o .a .exp .wim .vhd .vhdx"},
-        {"光盘镜像",".iso .img .vhd .vhdx .wim .gho .mds"},
-        {"数据库",  ".db .sqlite .mdb .mdf .ldf .bak"},
-        {"虚拟机",  ".vmdk .vdi .qcow2 .ova .ovf .vmx"},
-        {"其他",    ".dat .log .tmp .cache .dmp .etl .evtx"},
+        {"代码", ".cpp .h .hpp .c .cs .py .java .js .ts .html .css .json .xml .sql .go .rs"},
+        {"开发环境", ".pdb .idb .obj .o .a .exp .wim .vhd .vhdx"},
+        {"光盘镜像", ".iso .img .vhd .vhdx .wim .gho .mds"},
+        {"数据库", ".db .sqlite .mdb .mdf .ldf .bak"},
+        {"虚拟机", ".vmdk .vdi .qcow2 .ova .ovf .vmx"},
+        {"其他", ".dat .log .tmp .cache .dmp .etl .evtx"},
     };
     const char* groupIcons[] = {
-        Icons::P::duplicate,   // 压缩包
-        Icons::P::rocket,      // 视频 -> 播放含义近似
-        Icons::P::pie,         // 音频
-        Icons::P::bigfile,     // 图片
-        Icons::P::file,        // 文档
-        Icons::P::chip,        // 程序/库
-        Icons::P::code,        // 代码
-        Icons::P::terminal,    // 开发环境
-        Icons::P::disk,        // 光盘镜像
-        Icons::P::drive,       // 数据库
-        Icons::P::duplicate,   // 虚拟机
-        Icons::P::folder,      // 其他
+        Icons::P::duplicate, Icons::P::rocket, Icons::P::pie, Icons::P::bigfile,
+        Icons::P::file, Icons::P::chip, Icons::P::code, Icons::P::terminal,
+        Icons::P::disk, Icons::P::drive, Icons::P::duplicate, Icons::P::folder,
     };
     for (int gi = 0; gi < 12; ++gi) {
-        QIcon ic = Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x6C, 0x7A, 0x77), 18);
-        // 显示名带后缀示例：文档 (pdf, doc, txt…)；过滤 data 不变
+        QIcon ic =
+            Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x6C, 0x7A, 0x77), 18);
         const QString extsStr = QString::fromUtf8(extGroups[gi].exts);
         QStringList sample;
         const QStringList all = extsStr.split(' ', Qt::SkipEmptyParts);
         for (int e = 0; e < qMin(3, all.size()); ++e)
-            sample.append(all[e].mid(1));   // 去掉点
+            sample.append(all[e].mid(1));
         const QString label = QString::fromUtf8(extGroups[gi].name)
             + QStringLiteral(" (%1…)").arg(sample.join(", "));
         m_extCombo->addItem(ic, label, extsStr);
     }
+    m_extCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_extCombo->setMinimumHeight(36);
 
-    m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"));
+    m_ageCombo = new SearchableComboBox;
+    m_ageCombo->setToolTip(tr("只显示早于指定天数未修改的文件"));
+    m_ageCombo->addItem(tr("不限修改时间"), 0);
+    m_ageCombo->addItem(tr("超过 30 天"), 30);
+    m_ageCombo->addItem(tr("超过 90 天"), 90);
+    m_ageCombo->addItem(tr("超过 180 天"), 180);
+    m_ageCombo->addItem(tr("超过 365 天"), 365);
+    m_ageCombo->setCurrentIndex(0);
+    m_ageCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_ageCombo->setMinimumHeight(36);
+
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(16);
+    grid->setVerticalSpacing(6);
+    grid->setColumnStretch(0, 3);
+    grid->setColumnStretch(1, 4);
+    grid->setColumnStretch(2, 2);
+    grid->setColumnStretch(3, 3);
+    // 上行标签与下行控件同一列左对齐
+    grid->addWidget(fieldLabel(tr("目标磁盘范围"), filterCard), 0, 0);
+    grid->addWidget(fieldLabel(tr("指定扫描目录（可选）"), filterCard), 0, 1);
+    grid->addWidget(fieldLabel(tr("文件体积阈值"), filterCard), 0, 2);
+    grid->addWidget(fieldLabel(tr("文件分类类型"), filterCard), 0, 3);
+    grid->addWidget(m_driveCombo, 1, 0);
+    grid->addWidget(dirRow, 1, 1);
+    grid->addWidget(m_sizeCombo, 1, 2);
+    grid->addWidget(m_extCombo, 1, 3);
+    grid->addWidget(fieldLabel(tr("修改时间"), filterCard), 2, 0);
+    grid->addWidget(m_ageCombo, 3, 0);
+    filterLay->addLayout(grid);
+
+    auto* optRow = new QHBoxLayout;
+    optRow->setContentsMargins(0, 6, 0, 0);
+    optRow->setSpacing(16);
+    m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"), filterCard);
     m_groupByDrive->setChecked(true);
-
-    // 过滤行用流式布局：宽度不够时自动换行（避免控件挤压重叠）
-    auto* filterFlow = new FlowLayout(0, 8, 8);
-    filterFlow->addWidget(new QLabel(tr("磁盘:")));
-    filterFlow->addWidget(m_driveCombo);
-    filterFlow->addWidget(m_dirEdit);
-    auto* sizeLabel = new QLabel(tr("文件大小 >"));
-    sizeLabel->setToolTip(tr("只显示大于该大小的文件"));
-    filterFlow->addWidget(sizeLabel);
-    filterFlow->addWidget(m_sizeCombo);
-    filterFlow->addWidget(new QLabel(tr("类型:")));
-    filterFlow->addWidget(m_extCombo);
-    filterFlow->addWidget(m_groupByDrive);
-
-    m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"));
-    m_deleteBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")), tr("删除选中文件"));
+    optRow->addWidget(m_groupByDrive);
+    optRow->addStretch();
+    m_openBtn = new QPushButton(tr("打开所在文件夹"), filterCard);
+    m_openBtn->setProperty("class", "secondary");
+    m_openBtn->setEnabled(false);
+    m_deleteBtn = new QPushButton(
+        Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")),
+        tr("删除选中文件"), filterCard);
     m_deleteBtn->setProperty("class", "danger");
     m_deleteBtn->setEnabled(false);
-    filterFlow->addWidget(m_scanBtn);
-    filterFlow->addWidget(m_deleteBtn);
-    root->addLayout(filterFlow);
+    optRow->addWidget(m_openBtn);
+    optRow->addWidget(m_deleteBtn);
+    filterLay->addLayout(optRow);
+    root->addWidget(filterCard);
 
-    // 进度条 + 状态行：放在表格上方（过滤行与结果表之间）
+    // 进度 + 状态
     auto* progressRow = new QHBoxLayout;
+    progressRow->setSpacing(10);
     m_progress = new QProgressBar;
     m_progress->setFixedHeight(10);
     m_progress->setTextVisible(false);
-    m_progress->setFixedWidth(180);
+    m_progress->setFixedWidth(160);
     m_summary = new QLabel(tr("尚未扫描"));
     m_summary->setStyleSheet("color:#6C7A77; background:transparent;");
-    // 关键：长路径不改变布局宽度，超出即省略号
     m_summary->setMinimumWidth(0);
-    m_summary->setMaximumWidth(QWIDGETSIZE_MAX);
     m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    // 实时计时标签（扫描中显示"已用时 X 秒"，参考 WizTree/TreeSize）
     m_scanTimerLabel = new QLabel;
-    m_scanTimerLabel->setStyleSheet("color:#4B41E1; font-weight:600; background:transparent;");
+    m_scanTimerLabel->setStyleSheet(
+        "color:#4B41E1; font-weight:600; background:transparent;");
     m_scanTimerLabel->hide();
     progressRow->addWidget(m_progress);
     progressRow->addWidget(m_summary, 1);
     progressRow->addWidget(m_scanTimerLabel);
     root->addLayout(progressRow);
 
-    // 结果表（可自由排序 + 复选框多选）
+    // 结果表卡
+    auto* tableCard = new QFrame(this);
+    tableCard->setProperty("class", "card");
+    auto* tv = new QVBoxLayout(tableCard);
+    tv->setContentsMargins(10, 10, 10, 10);
+    tv->setSpacing(8);
+
     m_table = new QTableWidget(0, 6);
-    m_table->setHorizontalHeaderLabels({
-        QString(), tr("磁盘"), tr("文件大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
+    m_table->setHorizontalHeaderLabels(
+        {QString(), tr("磁盘"), tr("文件大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
     auto* hdr = m_table->horizontalHeader();
     hdr->setMinimumHeight(36);
     hdr->setStretchLastSection(false);
     hdr->setSectionResizeMode(kColCheck, QHeaderView::Fixed);
     m_table->setColumnWidth(kColCheck, 28);
-    // 其余列在填数据后按内容估算；完整路径吃剩余宽度
     for (int c : {kColDrive, kColSize, kColName, kColMtime})
         hdr->setSectionResizeMode(c, QHeaderView::Interactive);
     hdr->setSectionResizeMode(kColPath, QHeaderView::Stretch);
@@ -255,13 +349,15 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_table->verticalHeader()->setVisible(false);
     m_table->setWordWrap(false);
     m_table->setTextElideMode(Qt::ElideMiddle);
+    m_table->setShowGrid(false);
+    m_table->setFrameShape(QFrame::NoFrame);
 
-    // 表头文案带 ▲▼（静态 Qt 常丢原生排序箭头图，用字符兜底）
     auto updateHeaderArrows = [this]() {
         auto* hdr = m_table->horizontalHeader();
         const int sc = hdr->sortIndicatorSection();
         const QString arrow = hdr->sortIndicatorOrder() == Qt::AscendingOrder
-            ? QStringLiteral(" ▲") : QStringLiteral(" ▼");
+            ? QStringLiteral(" ▲")
+            : QStringLiteral(" ▼");
         auto label = [&](int col, const QString& title) {
             return title + (col == sc ? arrow : QString());
         };
@@ -275,10 +371,9 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         });
     };
     updateHeaderArrows();
-    connect(m_table->horizontalHeader(), &QHeaderView::sortIndicatorChanged,
-            this, [updateHeaderArrows](int, Qt::SortOrder) { updateHeaderArrows(); });
+    connect(m_table->horizontalHeader(), &QHeaderView::sortIndicatorChanged, this,
+            [updateHeaderArrows](int, Qt::SortOrder) { updateHeaderArrows(); });
 
-    // 表头全选：挂在表头第 0 列，点击表头空白也可切换
     m_headerCheck = new QCheckBox(m_table->horizontalHeader());
     m_headerCheck->setText(QString());
     m_headerCheck->setToolTip(tr("全选当前页"));
@@ -290,28 +385,32 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         m_table->setSortingEnabled(false);
         for (int r = 0; r < m_table->rowCount(); ++r) {
             auto* it = m_table->item(r, kColCheck);
-            if (!it) continue;
+            if (!it)
+                continue;
             it->setCheckState(on ? Qt::Checked : Qt::Unchecked);
             auto* pathItem = m_table->item(r, kColPath);
-            if (!pathItem) continue;
+            if (!pathItem)
+                continue;
             const QString path = QDir::fromNativeSeparators(pathItem->text());
-            if (on) m_checkedPaths.insert(path); else m_checkedPaths.remove(path);
+            if (on)
+                m_checkedPaths.insert(path);
+            else
+                m_checkedPaths.remove(path);
         }
         m_table->setSortingEnabled(true);
         updateDeleteButtonState();
     });
-    // 点击第 0 列表头区域 = 全选（避免误触发按复选列排序）
     connect(m_table->horizontalHeader(), &QHeaderView::sectionClicked, this, [this](int logical) {
-        if (logical != kColCheck) return;
-        if (!m_headerCheck->isVisible()) return;
+        if (logical != kColCheck)
+            return;
+        if (!m_headerCheck->isVisible())
+            return;
         m_headerCheck->toggle();
-        // 恢复大小列排序指示，避免表头落到复选列
-        m_table->horizontalHeader()->setSortIndicator(kColSize,
-            m_table->horizontalHeader()->sortIndicatorOrder());
+        m_table->horizontalHeader()->setSortIndicator(
+            kColSize, m_table->horizontalHeader()->sortIndicatorOrder());
     });
-    root->addWidget(m_table, 1);
+    tv->addWidget(m_table, 1);
 
-    // 分页栏：每页条数用完整文案，避免窄下拉 + 坏箭头夹在「20」「条」之间像乱码
     auto* pageRow = new QHBoxLayout;
     pageRow->addWidget(new QLabel(tr("每页")));
     m_pageSizeCombo = new QComboBox;
@@ -319,7 +418,6 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_pageSizeCombo->addItem(tr("20 条"), 20);
     m_pageSizeCombo->addItem(tr("100 条"), 100);
     m_pageSizeCombo->setMinimumWidth(100);
-    // 不自定义 down-arrow（border 三角在静态 Qt 下常显示成 □）
     m_pageSizeCombo->setStyleSheet(
         "QComboBox{padding:6px 10px; min-height:28px; border-radius:8px; border:1.5px solid #D8D5E8;}");
     pageRow->addWidget(m_pageSizeCombo);
@@ -336,7 +434,8 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     pageRow->addWidget(m_pageLabel);
     pageRow->addWidget(m_nextBtn);
     pageRow->addStretch();
-    root->addLayout(pageRow);
+    tv->addLayout(pageRow);
+    root->addWidget(tableCard, 1);
 
     auto gotoPage = [this](int page) {
         const int tp = qMax(1, totalPages());
@@ -352,30 +451,63 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
 
     connect(m_scanBtn, &QPushButton::clicked, this, &BigFilePage::doScan);
     connect(m_deleteBtn, &QPushButton::clicked, this, &BigFilePage::doDelete);
-    // 勾选变化 → 同步跨页集合 + 删除按钮可用性 + 全选框三态
+    connect(m_exportBtn, &QPushButton::clicked, this, [this] {
+        if (m_files.isEmpty())
+            return;
+        const QString path = QFileDialog::getSaveFileName(
+            this, tr("导出大文件清单"), QStringLiteral("bigfiles.csv"),
+            tr("CSV (*.csv);;所有文件 (*.*)"));
+        if (path.isEmpty())
+            return;
+        if (ReportService::exportScanReport(path, tr("大文件清单"), m_files))
+            m_summary->setText(tr("清单已导出：%1").arg(path));
+        else
+            QMessageBox::warning(this, tr("导出失败"), tr("无法写入文件"));
+    });
+    connect(m_openBtn, &QPushButton::clicked, this, [this] {
+        QString path;
+        const auto rows = m_table->selectionModel()->selectedRows();
+        if (!rows.isEmpty()) {
+            auto* it = m_table->item(rows.first().row(), kColPath);
+            if (it)
+                path = it->text();
+        }
+        if (path.isEmpty() && !m_checkedPaths.isEmpty())
+            path = *m_checkedPaths.constBegin();
+        if (path.isEmpty())
+            return;
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+    });
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
-        if (!it || it->column() != kColCheck) return;
+        if (!it || it->column() != kColCheck)
+            return;
         auto* pathItem = m_table->item(it->row(), kColPath);
-        if (!pathItem) return;
+        if (!pathItem)
+            return;
         const QString path = QDir::fromNativeSeparators(pathItem->text());
         QSignalBlocker blocker(m_headerCheck);
-        if (it->checkState() == Qt::Checked) m_checkedPaths.insert(path);
-        else m_checkedPaths.remove(path);
+        if (it->checkState() == Qt::Checked)
+            m_checkedPaths.insert(path);
+        else
+            m_checkedPaths.remove(path);
         int checked = 0;
         for (int r = 0; r < m_table->rowCount(); ++r) {
             auto* cell = m_table->item(r, kColCheck);
-            if (cell && cell->checkState() == Qt::Checked) ++checked;
+            if (cell && cell->checkState() == Qt::Checked)
+                ++checked;
         }
-        if (checked == 0) m_headerCheck->setCheckState(Qt::Unchecked);
-        else if (checked == m_table->rowCount()) m_headerCheck->setCheckState(Qt::Checked);
-        else m_headerCheck->setCheckState(Qt::PartiallyChecked);
+        if (checked == 0)
+            m_headerCheck->setCheckState(Qt::Unchecked);
+        else if (checked == m_table->rowCount())
+            m_headerCheck->setCheckState(Qt::Checked);
+        else
+            m_headerCheck->setCheckState(Qt::PartiallyChecked);
         updateDeleteButtonState();
     });
-    // 行选中也可删（用户常点行高亮却不点勾选）
-    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this](const QItemSelection&, const QItemSelection&) {
-        updateDeleteButtonState();
-    });
+    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this](const QItemSelection&, const QItemSelection&) { updateDeleteButtonState(); });
+
+    DiskOrganizer::applyCardShadows(this);
 }
 
 void BigFilePage::fitColumnsToContents() {
@@ -410,6 +542,28 @@ void BigFilePage::updateDeleteButtonState() {
     m_deleteBtn->setEnabled(n > 0 && !m_scanning);
     m_deleteBtn->setText(n > 0
         ? tr("删除选中文件 (%1)").arg(n) : tr("删除选中文件"));
+    if (m_openBtn)
+        m_openBtn->setEnabled((!m_checkedPaths.isEmpty() ||
+            (m_table->selectionModel() && !m_table->selectionModel()->selectedRows().isEmpty()) ||
+            !m_files.isEmpty()) && !m_scanning);
+
+    qint64 selectedBytes = 0;
+    QHash<QString, qint64> sizeOf;
+    for (const auto& f : m_files) sizeOf.insert(f.absolutePath, f.size);
+    QStringList paths = m_checkedPaths.values();
+    if (paths.isEmpty() && m_table->selectionModel()) {
+        for (const QModelIndex& idx : m_table->selectionModel()->selectedRows()) {
+            auto* pathItem = m_table->item(idx.row(), kColPath);
+            if (pathItem) paths << QDir::fromNativeSeparators(pathItem->text());
+        }
+    }
+    paths.removeDuplicates();
+    for (const QString& p : paths) selectedBytes += sizeOf.value(p, 0);
+    if (m_selectedMetric) {
+        m_selectedMetric->setText(n > 0
+            ? tr("%1 · %2 项").arg(formatSize(selectedBytes)).arg(n)
+            : QStringLiteral("--"));
+    }
 }
 
 void BigFilePage::doScan() {
@@ -448,6 +602,7 @@ void BigFilePage::doScan() {
     }
     BigFileFilter filter;
     filter.minSizeBytes = qMax(1, m_sizeCombo->currentData().toInt()) * 1024LL * 1024;
+    filter.olderThanDays = m_ageCombo ? m_ageCombo->currentData().toInt() : 0;
     // 类型下拉：data 为空格分隔的扩展名集合，拆成 QStringList 精确匹配
     const QStringList exts = m_extCombo->currentData().toString()
                                  .split(' ', Qt::SkipEmptyParts);
@@ -527,16 +682,19 @@ void BigFilePage::doScan() {
             m_files = result;
             populateResults();
             m_countMetric->setText(tr("%1 个").arg(m_files.size()));
+            qint64 totalBytes = 0;
+            for (const auto& f : m_files) totalBytes += f.size;
+            if (m_totalMetric) m_totalMetric->setText(formatSize(totalBytes));
+            if (m_exportBtn) m_exportBtn->setEnabled(!m_files.isEmpty());
+            if (m_openBtn) m_openBtn->setEnabled(!m_files.isEmpty());
             m_headStatus->setText(tr("扫描完成"));
             m_deleteBtn->setEnabled(false); // 需勾选后才可删
             updateDeleteButtonState();
-            qint64 total = 0;
-            for (const auto& f : m_files) total += f.size;
             const QString elapsed = elapsedMs >= 1000
                 ? tr("%1 秒").arg(QString::number(elapsedMs / 1000.0, 'f', 1))
                 : tr("%1 毫秒").arg(elapsedMs);
             m_summary->setText(tr("共 %1 个文件，合计 %2，耗时 %3")
-                                   .arg(m_files.size()).arg(formatSize(total)).arg(elapsed));
+                                   .arg(m_files.size()).arg(formatSize(totalBytes)).arg(elapsed));
             LOG << "UI: populated files=" << m_files.size()
                   << " tableRows=" << m_table->rowCount();
         }, Qt::QueuedConnection);

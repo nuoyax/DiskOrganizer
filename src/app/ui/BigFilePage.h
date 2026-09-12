@@ -39,16 +39,21 @@ private:
     QLineEdit* m_dirEdit = nullptr;     // 目录级扫描（空=整盘）
     SearchableComboBox* m_sizeCombo = nullptr;
     SearchableComboBox* m_extCombo = nullptr;
+    SearchableComboBox* m_ageCombo = nullptr;
     QCheckBox* m_groupByDrive = nullptr;
     QCheckBox* m_headerCheck = nullptr; // 表头全选复选框
     QTableWidget* m_table = nullptr;
     QLabel* m_summary = nullptr;
     QLabel* m_headStatus = nullptr;   // 页头状态 pill
-    QLabel* m_countMetric = nullptr;  // 指标卡：发现大文件数
-    QLabel* m_scanTimerLabel = nullptr; // 扫描中实时计时（已用时 X 秒）
+    QLabel* m_countMetric = nullptr;    // 发现大文件数
+    QLabel* m_totalMetric = nullptr;    // 累计占用
+    QLabel* m_selectedMetric = nullptr; // 已选容量
+    QLabel* m_scanTimerLabel = nullptr;
     QProgressBar* m_progress = nullptr;
     QPushButton* m_scanBtn = nullptr;
     QPushButton* m_deleteBtn = nullptr;
+    QPushButton* m_exportBtn = nullptr;
+    QPushButton* m_openBtn = nullptr;
 
     QList<FileInfo> m_files;
 

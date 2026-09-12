@@ -1,5 +1,6 @@
 #include "services/DefragService.h"
 #include <QProcess>
+#include <QRegularExpression>
 
 namespace DiskOrganizer {
 
@@ -20,6 +21,17 @@ static DefragResult runDefrag(const QStringList& args) {
     p.start("defrag", args);
     r.success = p.waitForFinished(-1);
     r.output = QString::fromLocal8Bit(p.readAllStandardOutput());
+    r.output += QString::fromLocal8Bit(p.readAllStandardError());
+    // 解析碎片百分比：匹配常见 “xx% fragmented” / “碎片: xx%” / 纯百分比行
+    QRegularExpression re(QStringLiteral("(\\d{1,3})\\s*%"),
+                          QRegularExpression::CaseInsensitiveOption);
+    auto it = re.globalMatch(r.output);
+    int best = 0;
+    while (it.hasNext()) {
+        const int v = it.next().captured(1).toInt();
+        if (v >= 0 && v <= 100) best = v; // 取最后一个合理值
+    }
+    r.fragmentedPercent = best;
     return r;
 }
 

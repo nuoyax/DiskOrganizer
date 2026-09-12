@@ -11,6 +11,10 @@ qt_add_executable(DiskOrganizer
     ui/Icons.h
     ui/Charts.h
     ui/Charts.cpp
+    ui/TreemapWidget.h
+    ui/TreemapWidget.cpp
+    ui/ClusterMapWidget.h
+    ui/ClusterMapWidget.cpp
     ui/CleanPage.h
     ui/CleanPage.cpp
     ui/DuplicatePage.h

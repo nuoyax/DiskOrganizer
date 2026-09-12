@@ -45,10 +45,12 @@ private:
     QLabel* m_headStatus = nullptr;          // 页头状态 pill 文本
     QLabel* m_heroState = nullptr;           // 扫描完成 · 发现 N 项
     QLabel* m_heroTotal = nullptr;           // 38.60 大数字
+    QLabel* m_heroUnit = nullptr;            // GB / MB / KB
     QLabel* m_summary = nullptr;             // 底部操作条汇总
     QProgressBar* m_progress = nullptr;
     QPushButton* m_scanBtn = nullptr;
     QPushButton* m_cleanBtn = nullptr;
+    QCheckBox* m_recycleCheck = nullptr;
     QList<CleanItem> m_items;
     bool m_updating = false;                 // 防递归
     bool m_recycleBin = true;

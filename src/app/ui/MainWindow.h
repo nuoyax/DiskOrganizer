@@ -6,6 +6,8 @@
 #include <QVBoxLayout>
 #include <QFrame>
 #include <QElapsedTimer>
+#include <QProgressBar>
+#include <QSizePolicy>
 
 namespace DiskOrganizer {
 
@@ -47,10 +49,13 @@ private:
     PieChart* m_diskPie = nullptr;
     QLabel* m_poolTotal = nullptr;    // 存储池总使用率 “3.08 TB / 4.50 TB”
     QLabel* m_poolPill = nullptr;     // 「已用 68.4%」
-    QLabel* m_pieLegend = nullptr;    // 环形图例（各盘已用）
+    QWidget* m_pieLegendHost = nullptr; // 环形图例外置容器（禁止用窄 QLabel 换行）
+    QVBoxLayout* m_pieLegendLay = nullptr;
     QLabel* m_cmpSubtitle = nullptr;  // 「N 卷在线分配情况」
     QVBoxLayout* m_barList = nullptr; // 驱动器进度条列表
     QLabel* m_barLegend = nullptr;    // 状态图例（彩色圆点富文本）
+    QLabel* m_sidebarPoolLabel = nullptr;
+    QProgressBar* m_sidebarPoolBar = nullptr;
     CleanPage* m_cleanPage = nullptr;
     DuplicatePage* m_duplicatePage = nullptr;
     SpaceAnalyzerPage* m_analyzerPage = nullptr;

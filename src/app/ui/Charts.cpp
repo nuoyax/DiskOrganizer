@@ -5,6 +5,7 @@
 #include <QFontMetrics>
 #include <QPropertyAnimation>
 #include <QHoverEvent>
+#include <QSizePolicy>
 #include <algorithm>
 #include <cmath>
 
@@ -33,6 +34,21 @@ PieChart::PieChart(QWidget* parent) : QWidget(parent) {
     setMinimumSize(280, 200);
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover);
+}
+
+void PieChart::setShowLegend(bool show) {
+    m_showLegend = show;
+    if (show) {
+        setMinimumSize(280, 200);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    } else {
+        // 仅环形：固定尺寸，绝不抢图例列宽度
+        setFixedSize(200, 200);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+    updateGeometry();
+    update();
 }
 
 void PieChart::setData(const QList<QPair<QString, double>>& slices) {
@@ -90,8 +106,8 @@ void PieChart::paintEvent(QPaintEvent*) {
         ++idx;
     }
 
-    // 中心镂空（甜甜圈效果）
-    p.setBrush(palette().window().color());
+    // 中心镂空（甜甜圈效果）— 卡片白底，避免吃到父级灰底发脏
+    p.setBrush(QColor(0xFF, 0xFF, 0xFF));
     p.setPen(Qt::NoPen);
     p.drawEllipse(center, radius * 0.62, radius * 0.62);
     // 中心三行文案（剩余可用 / 大数字 / 百分比）随动画淡入
@@ -117,23 +133,25 @@ void PieChart::paintEvent(QPaintEvent*) {
         p.setOpacity(1.0);
     }
 
-    // 图例
-    const double lx = pieRect.right() + 18;
-    double ly = 16;
-    idx = 0;
-    p.setFont(font());
-    for (const auto& slice : m_slices) {
-        if (ly > height() - 12) break;
-        p.setPen(Qt::NoPen);
-        p.setBrush(DiskOrganizer::diskSegmentColor(idx));
-        p.drawRoundedRect(QRectF(lx, ly + 2, 12, 12), 3, 3);
-        p.setPen(QColor(0x18, 0x14, 0x45));
-        const double pct = slice.second / m_total * 100;
-        p.drawText(QRectF(lx + 18, ly - 2, width() - lx - 14, 20),
-                   Qt::AlignLeft | Qt::AlignVCenter,
-                   QString("%1  %2%").arg(slice.first).arg(pct, 0, 'f', 1));
-        ly += 22;
-        ++idx;
+    // 图例（概览页关闭，改用外部 QLabel，避免双份图例）
+    if (m_showLegend) {
+        const double lx = pieRect.right() + 18;
+        double ly = 16;
+        idx = 0;
+        p.setFont(font());
+        for (const auto& slice : m_slices) {
+            if (ly > height() - 12) break;
+            p.setPen(Qt::NoPen);
+            p.setBrush(DiskOrganizer::diskSegmentColor(idx));
+            p.drawRoundedRect(QRectF(lx, ly + 2, 12, 12), 3, 3);
+            p.setPen(QColor(0x18, 0x14, 0x45));
+            const double pct = slice.second / m_total * 100;
+            p.drawText(QRectF(lx + 18, ly - 2, width() - lx - 14, 20),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       QString("%1  %2%").arg(slice.first).arg(pct, 0, 'f', 1));
+            ly += 22;
+            ++idx;
+        }
     }
 }
 
@@ -237,6 +255,42 @@ void BarChart::paintEvent(QPaintEvent*) {
                    DiskOrganizer::formatSize(bar.second));
         y += rowH;
         ++idx;
+    }
+}
+
+// ============ SegmentedBar ============
+SegmentedBar::SegmentedBar(QWidget* parent) : QWidget(parent) {
+    setFixedHeight(12);
+    setMinimumWidth(80);
+}
+
+void SegmentedBar::setSegments(const QList<QPair<QColor, double>>& segments) {
+    m_segs = segments;
+    update();
+}
+
+void SegmentedBar::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0xE4, 0xE1, 0xF2));
+    p.drawRoundedRect(r, 5, 5);
+
+    double total = 0;
+    for (const auto& s : m_segs) total += qMax(0.0, s.second);
+    if (total <= 0) return;
+
+    QPainterPath clip;
+    clip.addRoundedRect(r, 5, 5);
+    p.setClipPath(clip);
+    double x = r.left();
+    for (const auto& s : m_segs) {
+        if (s.second <= 0) continue;
+        const double w = r.width() * (s.second / total);
+        p.setBrush(s.first);
+        p.drawRect(QRectF(x, r.top(), w, r.height()));
+        x += w;
     }
 }
 
