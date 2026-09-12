@@ -7,11 +7,26 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QStandardPaths>
+#include <QFrame>
+#include <QGraphicsDropShadowEffect>
 
 // 浅色风格 QSS —— 参照 stitch_out 浅色稿（STYLE_B）：
 // 暖白画布 #FAFAF7 + 深靛蓝侧栏 #1E1B4B + 白卡软阴影 + 12px 圆角
 // + teal/indigo 双强调（#006B5F / #4B41E1）+ pill 按钮
 namespace DiskOrganizer {
+
+// 给所有 QFrame[class="card"] 挂软阴影（QSS 无 box-shadow，只能用 effect）
+inline void applyCardShadows(QWidget* root) {
+    const QList<QFrame*> frames = root->findChildren<QFrame*>();
+    for (QFrame* f : frames) {
+        if (f->property("class").toString() != QLatin1String("card")) continue;
+        auto* effect = new QGraphicsDropShadowEffect(f);
+        effect->setBlurRadius(28);
+        effect->setOffset(0, 4);
+        effect->setColor(QColor(0x1E, 0x1B, 0x4B, 26)); // 靛蓝 10% 透明
+        f->setGraphicsEffect(effect);
+    }
+}
 
 namespace {
 
@@ -101,7 +116,7 @@ QWidget {
 }
 QPushButton.navBtn {
     background: transparent; color: #C5C2E8; border: none;
-    border-radius: 10px; padding: 11px 16px; margin: 2px 10px;
+    border-radius: 18px; padding: 11px 16px; margin: 3px 12px;
     font-size: 13.5px; font-weight: 600; text-align: left;
 }
 QPushButton.navBtn:hover { background: #2E2A63; color: #FFFFFF; }
@@ -112,7 +127,7 @@ QPushButton.navBtn:checked {
 /* ===== 内容卡片 ===== */
 #contentArea { background: #FAFAF7; }
 QFrame.card {
-    background: #FFFFFF; border: 1px solid #EAE6F4; border-radius: 12px;
+    background: #FFFFFF; border: 1px solid #EFECF7; border-radius: 16px;
 }
 QLabel.cardTitle { font-size: 14px; font-weight: 700; color: #181445; background: transparent; }
 QLabel.cardSub   { font-size: 12px; color: #6C7A77; background: transparent; }

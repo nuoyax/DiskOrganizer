@@ -19,6 +19,7 @@
 #include "BigFilePage.h"
 #include "Charts.h"
 #include "Icons.h"
+#include "FlatStyle.h"
 #include "util/SizeFormatter.h"
 #include "util/FileSystemUtil.h"
 
@@ -84,7 +85,8 @@ void MainWindow::buildUi() {
     auto* content = new QWidget(this);
     content->setObjectName("contentArea");
     auto* cv = new QVBoxLayout(content);
-    cv->setContentsMargins(0, 0, 0, 0);
+    // 参照 stitch 稿：内容区四周留白，卡片浮在画布上
+    cv->setContentsMargins(24, 20, 24, 20);
 
     // 概览页（自建）
     auto* overview = buildOverviewPage();
@@ -124,6 +126,7 @@ void MainWindow::buildUi() {
     root->addWidget(sidebar);
     root->addWidget(content, 1);
     setCentralWidget(central);
+    DiskOrganizer::applyCardShadows(this);
 }
 
 QWidget* MainWindow::buildOverviewPage() {
