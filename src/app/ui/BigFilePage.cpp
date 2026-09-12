@@ -1,4 +1,5 @@
 #include "BigFilePage.h"
+#include "FlowLayout.h"
 #include "Icons.h"
 #include "SearchableComboBox.h"
 #include "FlatStyle.h"
@@ -113,8 +114,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     }
     root->addLayout(head);
 
-    // 过滤条件行
-    auto* filterRow = new QHBoxLayout;
+    // 过滤条件行（流式布局，窄窗口自动换行）
     m_driveCombo = new SearchableComboBox;
     // 磁盘项统一用硬盘图标（灰蓝色），与"全部磁盘"的 disk 图标呼应
     const QIcon driveIcon = Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
@@ -188,25 +188,26 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"));
     m_groupByDrive->setChecked(true);
 
-    filterRow->addWidget(new QLabel(tr("磁盘:")));
-    filterRow->addWidget(m_driveCombo);
-    filterRow->addWidget(m_dirEdit);
+    // 过滤行用流式布局：宽度不够时自动换行（避免控件挤压重叠）
+    auto* filterFlow = new FlowLayout(0, 8, 8);
+    filterFlow->addWidget(new QLabel(tr("磁盘:")));
+    filterFlow->addWidget(m_driveCombo);
+    filterFlow->addWidget(m_dirEdit);
     auto* sizeLabel = new QLabel(tr("文件大小 >"));
     sizeLabel->setToolTip(tr("只显示大于该大小的文件"));
-    filterRow->addWidget(sizeLabel);
-    filterRow->addWidget(m_sizeCombo);
-    filterRow->addWidget(new QLabel(tr("类型:")));
-    filterRow->addWidget(m_extCombo);
-    filterRow->addWidget(m_groupByDrive);
-    filterRow->addStretch();
+    filterFlow->addWidget(sizeLabel);
+    filterFlow->addWidget(m_sizeCombo);
+    filterFlow->addWidget(new QLabel(tr("类型:")));
+    filterFlow->addWidget(m_extCombo);
+    filterFlow->addWidget(m_groupByDrive);
 
     m_scanBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("开始扫描"));
     m_deleteBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")), tr("删除选中文件"));
     m_deleteBtn->setProperty("class", "danger");
     m_deleteBtn->setEnabled(false);
-    filterRow->addWidget(m_scanBtn);
-    filterRow->addWidget(m_deleteBtn);
-    root->addLayout(filterRow);
+    filterFlow->addWidget(m_scanBtn);
+    filterFlow->addWidget(m_deleteBtn);
+    root->addLayout(filterFlow);
 
     // 进度条 + 状态行：放在表格上方（过滤行与结果表之间）
     auto* progressRow = new QHBoxLayout;
