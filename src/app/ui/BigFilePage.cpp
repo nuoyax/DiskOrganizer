@@ -65,7 +65,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     root->setSpacing(12);
 
     auto* title = new QLabel(tr("扫描磁盘上的大文件与旧文件，结果按磁盘分类，点击表头自由排序"));
-    title->setStyleSheet("color:#636E88; background:transparent;");
+    title->setStyleSheet("color:#6C7A77; background:transparent;");
     root->addWidget(title);
 
     // 过滤条件行
@@ -73,8 +73,12 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_driveCombo = new SearchableComboBox;
     const auto drives = enumerateDisks();
     m_driveCombo->addItem(tr("全部磁盘"), QString());
+    // 磁盘项统一用硬盘图标（灰蓝色），与"全部磁盘"的 disk 图标呼应
+    const QIcon driveIcon = Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
+    const QIcon allIcon = Icons::tinted(QString::fromUtf8(Icons::P::disk), QColor(0x4B, 0x41, 0xE1), 18);
+    m_driveCombo->addItem(allIcon, tr("全部磁盘"), QString());
     for (const auto& d : drives)
-        m_driveCombo->addItem(QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
+        m_driveCombo->addItem(driveIcon, QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
             ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
     m_driveCombo->setFixedWidth(260);
     // 目录级扫描：可输入具体目录（如 C:/Users），留空 = 整盘扫描
@@ -126,7 +130,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         Icons::P::folder,      // 其他
     };
     for (int gi = 0; gi < 12; ++gi) {
-        QIcon ic = Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x5A, 0x64, 0x78), 18);
+        QIcon ic = Icons::tinted(QString::fromUtf8(groupIcons[gi]), QColor(0x6C, 0x7A, 0x77), 18);
         // 显示名带后缀示例：文档 (pdf, doc, txt…)；过滤 data 不变
         const QString extsStr = QString::fromUtf8(extGroups[gi].exts);
         QStringList sample;
@@ -168,7 +172,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_progress->setTextVisible(false);
     m_progress->setFixedWidth(180);
     m_summary = new QLabel(tr("尚未扫描"));
-    m_summary->setStyleSheet("color:#636E88; background:transparent;");
+    m_summary->setStyleSheet("color:#6C7A77; background:transparent;");
     // 关键：长路径不改变布局宽度，超出即省略号
     m_summary->setMinimumWidth(0);
     m_summary->setMaximumWidth(QWIDGETSIZE_MAX);
@@ -176,7 +180,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // 实时计时标签（扫描中显示"已用时 X 秒"，参考 WizTree/TreeSize）
     m_scanTimerLabel = new QLabel;
-    m_scanTimerLabel->setStyleSheet("color:#2B6CB0; font-weight:600; background:transparent;");
+    m_scanTimerLabel->setStyleSheet("color:#4B41E1; font-weight:600; background:transparent;");
     m_scanTimerLabel->hide();
     progressRow->addWidget(m_progress);
     progressRow->addWidget(m_summary, 1);
@@ -282,7 +286,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_prevBtn->setStyleSheet("QPushButton{padding:6px 12px; min-width:72px;}");
     m_nextBtn->setStyleSheet("QPushButton{padding:6px 12px; min-width:72px;}");
     m_pageLabel = new QLabel;
-    m_pageLabel->setStyleSheet("color:#636E88; background:transparent;");
+    m_pageLabel->setStyleSheet("color:#6C7A77; background:transparent;");
     pageRow->addSpacing(8);
     pageRow->addWidget(m_prevBtn);
     pageRow->addWidget(m_pageLabel);

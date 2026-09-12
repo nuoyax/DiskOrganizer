@@ -2,10 +2,8 @@
 #include "DuplicatePage.h"
 #include <QDateTime>
 #include <QDir>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
-#include <QLineEdit>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -13,9 +11,12 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <QtConcurrent>
 #include "services/CleanerService.h"
 #include "services/DuplicateFinder.h"
 #include "services/ScannerService.h"
+#include "SearchableComboBox.h"
+#include "util/FileSystemUtil.h"
 #include "util/SizeFormatter.h"
 
 namespace DiskOrganizer {
@@ -24,16 +25,17 @@ DuplicatePage::DuplicatePage(QWidget* parent) : PageBase(parent) {
     auto* layout = new QVBoxLayout(this);
 
     auto* top = new QHBoxLayout;
-    m_pathEdit = new QLineEdit(QDir::homePath(), this);
-    auto* browse = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::folder), QColor("white")), tr("浏览…"), this);
-    connect(browse, &QPushButton::clicked, this, [this] {
-        const QString dir = QFileDialog::getExistingDirectory(this, tr("选择目录"), m_pathEdit->text());
-        if (!dir.isEmpty()) m_pathEdit->setText(dir);
-    });
+    // 指定盘符扫描（整卷走 MFT 快速路径，秒级）
+    m_driveCombo = new SearchableComboBox;
+    const QIcon driveIcon = Icons::tinted(QString::fromUtf8(Icons::P::drive), QColor(0x6C, 0x7A, 0x77), 18);
+    for (const auto& d : enumerateDisks())
+        m_driveCombo->addItem(driveIcon, QString("%1 (%2)").arg(d.driveLetter, d.volumeLabel.isEmpty()
+            ? QStringLiteral("本地磁盘") : d.volumeLabel), d.driveLetter);
+    if (m_driveCombo->count() > 0) m_driveCombo->setCurrentIndex(0);
+    m_driveCombo->setFixedWidth(260);
     m_findBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("查找重复"), this);
-    top->addWidget(new QLabel(tr("目录："), this));
-    top->addWidget(m_pathEdit, 1);
-    top->addWidget(browse);
+    top->addWidget(new QLabel(tr("磁盘："), this));
+    top->addWidget(m_driveCombo);
     top->addWidget(m_findBtn);
     layout->addLayout(top);
 
@@ -46,7 +48,7 @@ DuplicatePage::DuplicatePage(QWidget* parent) : PageBase(parent) {
     layout->addWidget(m_list);
 
     auto* bottom = new QHBoxLayout;
-    m_keepBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::check), QColor(0x2F,0x6F,0xED)), tr("保留每组最早修改的"), this);
+    m_keepBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::check), QColor(0x4B,0x41,0xE1)), tr("保留每组最早修改的"), this);
     m_keepBtn->setEnabled(false);
     m_deleteBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")), tr("删除选中（回收站）"), this);
     m_deleteBtn->setEnabled(false);
@@ -64,29 +66,47 @@ DuplicatePage::DuplicatePage(QWidget* parent) : PageBase(parent) {
 }
 
 void DuplicatePage::doFind() {
-    const QString root = m_pathEdit->text();
-    if (!QFileInfo::exists(root)) {
-        QMessageBox::warning(this, tr("错误"), tr("目录不存在：%1").arg(root));
+    const QString drive = m_driveCombo->currentData().toString();
+    if (drive.isEmpty()) {
+        QMessageBox::warning(this, tr("错误"), tr("请选择要扫描的磁盘"));
         return;
     }
+    const QString root = drive + "/";
+    // 扫描中再点 = 取消
+    if (m_finding) {
+        m_cancelled.store(true);
+        m_summary->setText(tr("正在取消……"));
+        return;
+    }
+    m_finding = true;
+    m_cancelled.store(false);
+    m_findBtn->setText(tr("取消"));
     m_list->clear();
     m_progress->setRange(0, 0);
     m_progress->show();
-    m_summary->setText(tr("正在扫描目录…"));
-    m_findBtn->setEnabled(false);
+    m_summary->setText(tr("正在扫描磁盘……"));
     m_keepBtn->setEnabled(false);
     m_deleteBtn->setEnabled(false);
 
-    // 先扫描文件列表，再三级比对
-    auto* scanner = new ScannerService(this);
-    auto* finder = new DuplicateFinder(this);
-    QList<FileInfo>* files = new QList<FileInfo>;
-    connect(scanner, &ScannerService::fileScanned, this, [files](const FileInfo& fi) {
-        if (!fi.isDir) files->append(fi);
-    });
-    connect(scanner, &ScannerService::finished, this,
-            [this, finder, files](qint64, qint64, qint64) {
-        m_summary->setText(tr("共 %1 个文件，正在比对…").arg(files->size()));
+    // 后台：scanBlocking 整卷扫描（NTFS 走 MFT，秒级），完成后三级比对
+    (void)QtConcurrent::run([this, root]() {
+        ScannerService scanner;
+        auto cancelled = [this]() { return m_cancelled.load(); };
+        std::function<bool(qint64, const QString&)> onProgress =
+            [this, cancelled](qint64 n, const QString& path) -> bool {
+            if (cancelled()) return false;
+            QMetaObject::invokeMethod(this, [this, n, path]() {
+                m_summary->setText(tr("扫描中：%1").arg(path));
+            }, Qt::QueuedConnection);
+            return true;
+        };
+        QList<FileInfo> files = scanner.scanBlocking({root}, onProgress, 0, 0, cancelled);
+        if (cancelled()) {
+            QMetaObject::invokeMethod(this, [this]() { resetUiAfterCancel(); }, Qt::QueuedConnection);
+            return;
+        }
+
+        auto* finder = new DuplicateFinder(this);
         connect(finder, &DuplicateFinder::groupFound, this,
                 [this](const DuplicateGroup& g) {
             const qint64 firstModified = g.files.first().lastModified;
@@ -108,20 +128,25 @@ void DuplicatePage::doFind() {
         });
         connect(finder, &DuplicateFinder::finished, this,
                 [this](int groups, qint64 wasted) {
+            m_finding = false;
             m_progress->hide();
             m_summary->setText(tr("发现 %1 组重复，浪费 %2").arg(groups)
                                    .arg(DiskOrganizer::formatSize(wasted)));
-            m_findBtn->setEnabled(true);
+            m_findBtn->setText(tr("查找重复"));
             m_keepBtn->setEnabled(groups > 0);
             m_deleteBtn->setEnabled(groups > 0);
-        });
-        finder->find(*files, true);
-    }, Qt::QueuedConnection);
-    connect(scanner, &ScannerService::progress, this, [this](int percent, const QString& path) {
-        m_progress->setValue(percent);
-        m_summary->setText(tr("扫描中：%1").arg(path));
+        }, Qt::QueuedConnection);
+        connect(finder, &DuplicateFinder::finished, finder, &QObject::deleteLater,
+                Qt::QueuedConnection);
+        finder->find(files, true);
     });
-    scanner->startScan({root});
+}
+
+void DuplicatePage::resetUiAfterCancel() {
+    m_finding = false;
+    m_progress->hide();
+    m_summary->setText(tr("扫描已取消"));
+    m_findBtn->setText(tr("查找重复"));
 }
 
 void DuplicatePage::keepOldest() {

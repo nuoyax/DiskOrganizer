@@ -23,7 +23,7 @@ DefragPage::DefragPage(QWidget* parent) : PageBase(parent) {
     top->addWidget(new QLabel(tr("驱动器："), this));
     m_driveBox = new QComboBox(this);
     top->addWidget(m_driveBox);
-    auto* refreshBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::refresh), QColor(0x2F,0x6F,0xED)), tr("刷新"), this);
+    auto* refreshBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::refresh), QColor(0x4B,0x41,0xE1)), tr("刷新"), this);
     connect(refreshBtn, &QPushButton::clicked, this, &DefragPage::refreshDrives);
     top->addWidget(refreshBtn);
     m_analyzeBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")), tr("分析"), this);

@@ -33,7 +33,7 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     root->setSpacing(12);
 
     auto* title = new QLabel(tr("扫描并清理系统垃圾文件，按类别勾选需要处理的项目"));
-    title->setStyleSheet("color:#636E88; background:transparent;");
+    title->setStyleSheet("color:#6C7A77; background:transparent;");
     root->addWidget(title);
 
     // 分类复选框
@@ -71,7 +71,7 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
 
     // 底部
     m_summary = new QLabel(tr("尚未扫描"));
-    m_summary->setStyleSheet("color:#636E88; background:transparent;");
+    m_summary->setStyleSheet("color:#6C7A77; background:transparent;");
     m_progress = new QProgressBar;
     m_progress->setFixedHeight(10);
     m_progress->setTextVisible(false);
