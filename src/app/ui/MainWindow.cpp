@@ -104,20 +104,20 @@ void MainWindow::buildUi() {
 
     cv->addWidget(m_stack, 1);
 
-    auto* navGroup = new QButtonGroup(this);
-    connect(navGroup, &QButtonGroup::idClicked, this, [this](int id) {
+    m_navGroup = new QButtonGroup(this);
+    connect(m_navGroup, &QButtonGroup::idClicked, this, [this](int id) {
         m_stack->setCurrentIndex(id);
     });
     for (int i = 0; i < 6; ++i) {
         auto* btn = makeNavBtn(QString::fromUtf8(navs[i].text), navs[i].icon, sidebar);
-        navGroup->addButton(btn, i);
+        m_navGroup->addButton(btn, i);
         sv->addWidget(btn);
         connect(btn, &QPushButton::toggled, this, [btn, icon = navs[i].icon]() {
             btn->setIcon(Icons::tinted(icon,
                 btn->isChecked() ? QColor(0x5E, 0xE0, 0xD0) : QColor(0xC5, 0xC2, 0xE8)));
         });
     }
-    navGroup->button(0)->setChecked(true);
+    m_navGroup->button(0)->setChecked(true);
     sv->addStretch();
 
     // 侧栏底部：存储池小卡
@@ -196,7 +196,7 @@ QWidget* MainWindow::buildOverviewPage() {
         for (const auto& d : disks) {
             if (d.totalBytes > 0) { first = d.driveLetter; break; }
         }
-        m_stack->setCurrentIndex(4);
+        switchToPage(4);
         if (!first.isEmpty())
             m_analyzerPage->scanPath(first.endsWith(':') ? first + "/" : first);
     });
@@ -368,10 +368,10 @@ void MainWindow::refreshDisks() {
         analyzeBtn->setStyleSheet(compactBtn);
         const QString drive = d.driveLetter;
         connect(cleanBtn, &QPushButton::clicked, this, [this] {
-            m_stack->setCurrentIndex(1);
+            switchToPage(1);
         });
         connect(analyzeBtn, &QPushButton::clicked, this, [this, drive] {
-            m_stack->setCurrentIndex(4);
+            switchToPage(4);
             m_analyzerPage->scanPath(drive.endsWith(':') ? drive + "/" : drive);
         });
         ah->addWidget(cleanBtn);
@@ -542,10 +542,19 @@ void MainWindow::animateBars() {
     if (!done) QTimer::singleShot(16, this, &MainWindow::animateBars);
 }
 
+void MainWindow::switchToPage(int index) {
+    if (!m_stack || index < 0 || index >= m_stack->count()) return;
+    m_stack->setCurrentIndex(index);
+    if (m_navGroup) {
+        if (auto* btn = m_navGroup->button(index))
+            btn->setChecked(true);
+    }
+}
+
 void MainWindow::openDiskInAnalyzer(int row, int column) {
     Q_UNUSED(column)
     const QString drive = m_diskTable->item(row, 0)->text();
-    m_stack->setCurrentIndex(4);
+    switchToPage(4);
     m_analyzerPage->scanPath(drive.endsWith(':') ? drive + "/" : drive);
 }
 

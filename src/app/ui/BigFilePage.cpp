@@ -12,6 +12,10 @@
 #include "Charts.h"
 
 #include <QMessageBox>
+#include <QClipboard>
+#include <QApplication>
+#include <QMenu>
+#include <QProcess>
 #include <QFrame>
 #include <QItemSelectionModel>
 #include <QItemSelection>
@@ -53,6 +57,13 @@ constexpr int kColName  = 3;
 constexpr int kColPath  = 4;
 constexpr int kColMtime = 5;
 
+bool isUndeletableSystemFile(const QString& path) {
+    const QString name = QFileInfo(path).fileName().toLower();
+    return name == QLatin1String("pagefile.sys")
+        || name == QLatin1String("hiberfil.sys")
+        || name == QLatin1String("swapfile.sys");
+}
+
 // 展示友好大小，排序按字节
 class SizeTableItem : public QTableWidgetItem {
 public:
@@ -68,10 +79,11 @@ public:
 } // namespace
 
 BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* root = new QVBoxLayout(this);
-    // contentArea 已有留白，页内不再叠外边距
+    // contentArea 已有留白，页内不再叠外边距；收紧间距把高度让给列表
     root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(14);
+    root->setSpacing(8);
 
     auto fieldLabel = [](const QString& text, QWidget* parent) {
         auto* lab = new QLabel(text, parent);
@@ -80,7 +92,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         return lab;
     };
 
-    // ===== 页头：标题左 + 导出/扫描右 =====
+    // ===== 页头：仅标题与状态 =====
     auto* head = new QHBoxLayout;
     head->setSpacing(12);
     auto* headCol = new QVBoxLayout;
@@ -103,15 +115,6 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     headCol->addLayout(titleRow);
     headCol->addWidget(subtitle);
     head->addLayout(headCol, 1);
-
-    m_exportBtn = new QPushButton(tr("导出清单"), this);
-    m_exportBtn->setProperty("class", "secondary");
-    m_exportBtn->setEnabled(false);
-    m_scanBtn = new QPushButton(
-        Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")),
-        tr("开始扫描"), this);
-    head->addWidget(m_exportBtn, 0, Qt::AlignTop);
-    head->addWidget(m_scanBtn, 0, Qt::AlignTop);
     root->addLayout(head);
 
     // ===== 三列指标卡对齐 =====
@@ -121,9 +124,10 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
                              const QString& cap) -> QLabel* {
         auto* card = new QFrame(this);
         card->setProperty("class", "card");
+        card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* h = new QHBoxLayout(card);
-        h->setContentsMargins(14, 12, 14, 12);
-        h->setSpacing(10);
+        h->setContentsMargins(12, 8, 12, 8);
+        h->setSpacing(8);
         auto* chip = new QLabel(card);
         chip->setFixedSize(36, 36);
         chip->setAlignment(Qt::AlignCenter);
@@ -135,7 +139,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         c->setStyleSheet("font-size:11px; color:#6C7A77; background:transparent;");
         auto* v = new QLabel(QStringLiteral("--"), card);
         v->setStyleSheet(
-            "font-size:18px; font-weight:800; color:#181445; background:transparent;");
+            "font-size:16px; font-weight:800; color:#181445; background:transparent;");
         col->addWidget(c);
         col->addWidget(v);
         h->addWidget(chip);
@@ -156,9 +160,10 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     // ===== 筛选卡：标签上行、控件下行，四列网格对齐 =====
     auto* filterCard = new QFrame(this);
     filterCard->setProperty("class", "card");
+    filterCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto* filterLay = new QVBoxLayout(filterCard);
-    filterLay->setContentsMargins(16, 14, 16, 14);
-    filterLay->setSpacing(10);
+    filterLay->setContentsMargins(12, 10, 12, 10);
+    filterLay->setSpacing(6);
 
     m_driveCombo = new SearchableComboBox;
     const QIcon driveIcon =
@@ -277,25 +282,41 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     grid->addWidget(dirRow, 1, 1);
     grid->addWidget(m_sizeCombo, 1, 2);
     grid->addWidget(m_extCombo, 1, 3);
-    grid->addWidget(fieldLabel(tr("修改时间"), filterCard), 2, 0);
-    grid->addWidget(m_ageCombo, 3, 0);
     filterLay->addLayout(grid);
 
     auto* optRow = new QHBoxLayout;
-    optRow->setContentsMargins(0, 6, 0, 0);
-    optRow->setSpacing(16);
+    optRow->setContentsMargins(0, 4, 0, 0);
+    optRow->setSpacing(10);
     m_groupByDrive = new QCheckBox(tr("按磁盘分组显示"), filterCard);
     m_groupByDrive->setChecked(true);
+    auto* ageLab = fieldLabel(tr("修改时间"), filterCard);
+    m_ageCombo->setMinimumWidth(140);
+    m_ageCombo->setMaximumWidth(200);
     optRow->addWidget(m_groupByDrive);
+    optRow->addWidget(ageLab);
+    optRow->addWidget(m_ageCombo);
     optRow->addStretch();
+    // 主操作集中在此行：扫描 / 导出 / 打开 / 删除
+    m_scanBtn = new QPushButton(
+        Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")),
+        tr("开始扫描"), filterCard);
+    m_scanBtn->setMinimumHeight(36);
+    m_exportBtn = new QPushButton(tr("导出清单"), filterCard);
+    m_exportBtn->setProperty("class", "secondary");
+    m_exportBtn->setEnabled(false);
+    m_exportBtn->setMinimumHeight(36);
     m_openBtn = new QPushButton(tr("打开所在文件夹"), filterCard);
     m_openBtn->setProperty("class", "secondary");
     m_openBtn->setEnabled(false);
+    m_openBtn->setMinimumHeight(36);
     m_deleteBtn = new QPushButton(
         Icons::tinted(QString::fromUtf8(Icons::P::trash), QColor("white")),
         tr("删除选中文件"), filterCard);
     m_deleteBtn->setProperty("class", "danger");
     m_deleteBtn->setEnabled(false);
+    m_deleteBtn->setMinimumHeight(36);
+    optRow->addWidget(m_scanBtn);
+    optRow->addWidget(m_exportBtn);
     optRow->addWidget(m_openBtn);
     optRow->addWidget(m_deleteBtn);
     filterLay->addLayout(optRow);
@@ -322,14 +343,17 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     progressRow->addWidget(m_scanTimerLabel);
     root->addLayout(progressRow);
 
-    // 结果表卡
+    // 结果表卡：占满剩余高度并贴底
     auto* tableCard = new QFrame(this);
     tableCard->setProperty("class", "card");
+    tableCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* tv = new QVBoxLayout(tableCard);
-    tv->setContentsMargins(10, 10, 10, 10);
-    tv->setSpacing(8);
+    tv->setContentsMargins(8, 8, 8, 8);
+    tv->setSpacing(6);
 
     m_table = new QTableWidget(0, 6);
+    m_table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_table->setMinimumHeight(280);
     m_table->setHorizontalHeaderLabels(
         {QString(), tr("磁盘"), tr("文件大小"), tr("文件名"), tr("完整路径"), tr("修改时间")});
     auto* hdr = m_table->horizontalHeader();
@@ -353,6 +377,9 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_table->setTextElideMode(Qt::ElideMiddle);
     m_table->setShowGrid(false);
     m_table->setFrameShape(QFrame::NoFrame);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table, &QTableWidget::customContextMenuRequested,
+            this, &BigFilePage::showTableContextMenu);
 
     auto updateHeaderArrows = [this]() {
         auto* hdr = m_table->horizontalHeader();
@@ -387,7 +414,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         m_table->setSortingEnabled(false);
         for (int r = 0; r < m_table->rowCount(); ++r) {
             auto* it = m_table->item(r, kColCheck);
-            if (!it)
+            if (!it || !(it->flags() & Qt::ItemIsUserCheckable))
                 continue;
             it->setCheckState(on ? Qt::Checked : Qt::Unchecked);
             auto* pathItem = m_table->item(r, kColPath);
@@ -411,7 +438,7 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
         m_table->horizontalHeader()->setSortIndicator(
             kColSize, m_table->horizontalHeader()->sortIndicatorOrder());
     });
-    tv->addWidget(m_table, 1);
+    tv->addWidget(m_table, /*stretch*/ 1);
 
     auto* pageRow = new QHBoxLayout;
     pageRow->addWidget(new QLabel(tr("每页")));
@@ -469,16 +496,12 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     connect(m_openBtn, &QPushButton::clicked, this, [this] {
         QString path;
         const auto rows = m_table->selectionModel()->selectedRows();
-        if (!rows.isEmpty()) {
-            auto* it = m_table->item(rows.first().row(), kColPath);
-            if (it)
-                path = it->text();
-        }
+        if (!rows.isEmpty())
+            path = pathAtRow(rows.first().row());
         if (path.isEmpty() && !m_checkedPaths.isEmpty())
             path = *m_checkedPaths.constBegin();
-        if (path.isEmpty())
-            return;
-        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+        if (!path.isEmpty())
+            openContainingFolder(path);
     });
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
         if (!it || it->column() != kColCheck)
@@ -727,19 +750,36 @@ void BigFilePage::renderPage() {
     const auto makeRow = [this](const FileInfo& f) {
         const int r = m_table->rowCount();
         m_table->insertRow(r);
-        // 复选框列（行选择以复选框为准）
+        const bool locked = isUndeletableSystemFile(f.absolutePath);
+        if (locked)
+            m_checkedPaths.remove(f.absolutePath);
+
         auto* itCheck = new QTableWidgetItem;
-        itCheck->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        // 勾选状态按路径跨页保留
-        itCheck->setCheckState(m_checkedPaths.contains(f.absolutePath) ? Qt::Checked : Qt::Unchecked);
-        // 磁盘列
+        if (locked) {
+            itCheck->setFlags(Qt::ItemIsSelectable);
+            itCheck->setCheckState(Qt::Unchecked);
+            itCheck->setToolTip(tr("系统锁定文件，无法删除"));
+        } else {
+            itCheck->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            itCheck->setCheckState(m_checkedPaths.contains(f.absolutePath) ? Qt::Checked
+                                                                          : Qt::Unchecked);
+        }
         auto* itDrive = new QTableWidgetItem(f.absolutePath.left(2).toUpper());
-        // 文件大小列：友好展示 + 按字节排序
         auto* itSize = new SizeTableItem(f.size);
         auto* itName = new QTableWidgetItem(f.name);
         auto* itPath = new QTableWidgetItem(QDir::toNativeSeparators(f.absolutePath));
         auto* itTime = new QTableWidgetItem(
             QDateTime::fromMSecsSinceEpoch(f.lastModified).toString("yyyy-MM-dd HH:mm"));
+        if (locked) {
+            const QBrush dim(QColor(0x9C, 0xA3, 0xAF));
+            QTableWidgetItem* cells[] = {itCheck, itDrive, itSize, itName, itPath, itTime};
+            for (QTableWidgetItem* it : cells) {
+                it->setForeground(dim);
+                it->setFlags(it->flags() & ~Qt::ItemIsEnabled);
+            }
+            itName->setText(f.name + tr("（系统文件）"));
+            itName->setToolTip(tr("pagefile / 休眠文件等由系统锁定，运行中无法删除"));
+        }
         m_table->setItem(r, kColCheck, itCheck);
         m_table->setItem(r, kColDrive, itDrive);
         m_table->setItem(r, kColSize, itSize);
@@ -886,6 +926,136 @@ void BigFilePage::doDelete() {
             doScan();
         }, Qt::QueuedConnection);
     });
+}
+
+QString BigFilePage::pathAtRow(int row) const {
+    if (!m_table || row < 0 || row >= m_table->rowCount())
+        return {};
+    auto* it = m_table->item(row, kColPath);
+    return it ? QDir::fromNativeSeparators(it->text()) : QString();
+}
+
+void BigFilePage::openContainingFolder(const QString& path) const {
+    if (path.isEmpty()) return;
+    const QString native = QDir::toNativeSeparators(path);
+    if (QFileInfo::exists(native)) {
+        // 在资源管理器中定位并选中该文件
+        QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                {QStringLiteral("/select,"), native});
+        return;
+    }
+    const QString dir = QFileInfo(native).absolutePath();
+    if (!dir.isEmpty())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+void BigFilePage::showFileDetails(const QString& path) const {
+    if (path.isEmpty()) return;
+    const QFileInfo fi(QDir::toNativeSeparators(path));
+    QString attrs;
+    if (fi.exists()) {
+        QStringList bits;
+        if (fi.isHidden()) bits << tr("隐藏");
+        if (!fi.isWritable()) bits << tr("只读/不可写");
+        if (fi.isSymLink()) bits << tr("符号链接");
+        if (isUndeletableSystemFile(path)) bits << tr("系统锁定（不可删除）");
+        attrs = bits.isEmpty() ? tr("普通文件") : bits.join(QStringLiteral(" · "));
+    } else {
+        attrs = tr("文件当前不存在（可能已删除或移走）");
+    }
+
+    const QString body = tr(
+        "文件名：%1\n"
+        "完整路径：%2\n"
+        "大小：%3（%4 字节）\n"
+        "修改时间：%5\n"
+        "创建时间：%6\n"
+        "属性：%7")
+        .arg(fi.fileName(),
+             QDir::toNativeSeparators(fi.absoluteFilePath()),
+             formatSize(fi.exists() ? fi.size() : 0),
+             QString::number(fi.exists() ? fi.size() : 0),
+             fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")),
+             fi.birthTime().isValid()
+                 ? fi.birthTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                 : tr("未知"),
+             attrs);
+
+    QMessageBox box(const_cast<BigFilePage*>(this));
+    box.setWindowTitle(tr("文件详情"));
+    box.setIcon(QMessageBox::Information);
+    box.setText(fi.fileName());
+    box.setInformativeText(body);
+    box.setStandardButtons(QMessageBox::Ok);
+    auto* copyBtn = box.addButton(tr("复制路径"), QMessageBox::ActionRole);
+    box.exec();
+    if (box.clickedButton() == copyBtn)
+        QApplication::clipboard()->setText(QDir::toNativeSeparators(fi.absoluteFilePath()));
+}
+
+void BigFilePage::showTableContextMenu(const QPoint& pos) {
+    const QModelIndex idx = m_table->indexAt(pos);
+    if (!idx.isValid()) return;
+    const int row = idx.row();
+    m_table->selectRow(row);
+    const QString path = pathAtRow(row);
+    if (path.isEmpty()) return;
+
+    const bool locked = isUndeletableSystemFile(path);
+    const bool checked = m_checkedPaths.contains(path);
+    auto* checkItem = m_table->item(row, kColCheck);
+    const bool canCheck = checkItem && (checkItem->flags() & Qt::ItemIsUserCheckable);
+
+    QMenu menu(this);
+    QAction* actOpenFolder = menu.addAction(tr("打开所在文件夹"));
+    QAction* actOpenFile = menu.addAction(tr("打开文件"));
+    actOpenFile->setEnabled(!locked && QFileInfo::exists(QDir::toNativeSeparators(path)));
+    menu.addSeparator();
+    QAction* actDetails = menu.addAction(tr("查看文件详情"));
+    QAction* actCopyPath = menu.addAction(tr("复制完整路径"));
+    QAction* actCopyName = menu.addAction(tr("复制文件名"));
+    menu.addSeparator();
+    QAction* actToggle = menu.addAction(checked ? tr("取消勾选") : tr("勾选此文件"));
+    actToggle->setEnabled(canCheck && !locked);
+    QAction* actDelete = menu.addAction(tr("删除此文件…"));
+    actDelete->setEnabled(!locked);
+    if (locked) {
+        menu.addSeparator();
+        QAction* tip = menu.addAction(tr("系统锁定文件，无法删除"));
+        tip->setEnabled(false);
+    }
+
+    QAction* chosen = menu.exec(m_table->viewport()->mapToGlobal(pos));
+    if (!chosen) return;
+
+    if (chosen == actOpenFolder) {
+        openContainingFolder(path);
+    } else if (chosen == actOpenFile) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QDir::toNativeSeparators(path)));
+    } else if (chosen == actDetails) {
+        showFileDetails(path);
+    } else if (chosen == actCopyPath) {
+        QApplication::clipboard()->setText(QDir::toNativeSeparators(path));
+        m_summary->setText(tr("已复制路径"));
+    } else if (chosen == actCopyName) {
+        QApplication::clipboard()->setText(QFileInfo(path).fileName());
+        m_summary->setText(tr("已复制文件名"));
+    } else if (chosen == actToggle && checkItem) {
+        checkItem->setCheckState(checked ? Qt::Unchecked : Qt::Checked);
+    } else if (chosen == actDelete) {
+        m_checkedPaths.clear();
+        m_checkedPaths.insert(path);
+        // 同步当前页勾选显示
+        for (int r = 0; r < m_table->rowCount(); ++r) {
+            auto* it = m_table->item(r, kColCheck);
+            auto* p = m_table->item(r, kColPath);
+            if (!it || !p || !(it->flags() & Qt::ItemIsUserCheckable)) continue;
+            const QString rowPath = QDir::fromNativeSeparators(p->text());
+            it->setCheckState(rowPath == path ? Qt::Checked : Qt::Unchecked);
+        }
+        updateDeleteButtonState();
+        doDelete();
+    }
 }
 
 } // namespace DiskOrganizer

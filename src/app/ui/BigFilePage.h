@@ -27,6 +27,7 @@ public:
 private slots:
     void doScan();
     void doDelete();
+    void showTableContextMenu(const QPoint& pos);
 
 private:
     void populateResults();
@@ -34,6 +35,9 @@ private:
     int totalPages() const;
     void updateDeleteButtonState();
     void fitColumnsToContents(); // 按当前页内容估算列宽
+    QString pathAtRow(int row) const;
+    void openContainingFolder(const QString& path) const;
+    void showFileDetails(const QString& path) const;
 
     SearchableComboBox* m_driveCombo = nullptr;
     QLineEdit* m_dirEdit = nullptr;     // 目录级扫描（空=整盘）

@@ -9,6 +9,8 @@
 #include <QProgressBar>
 #include <QSizePolicy>
 
+class QButtonGroup;
+
 namespace DiskOrganizer {
 
 class CleanPage;
@@ -17,7 +19,6 @@ class DefragPage;
 class SpaceAnalyzerPage;
 class BigFilePage;
 class PieChart;
-class CleanPage;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -42,8 +43,10 @@ private:
     void buildUi();
     void buildMenus();
     QWidget* buildOverviewPage();
+    void switchToPage(int index);      // 同步 stack + 左侧导航选中态
 
     QStackedWidget* m_stack = nullptr;
+    QButtonGroup* m_navGroup = nullptr;
     QTableWidget* m_diskTable = nullptr;
     QLabel* m_overviewPill = nullptr; // 「N 卷已装载」pill
     PieChart* m_diskPie = nullptr;
