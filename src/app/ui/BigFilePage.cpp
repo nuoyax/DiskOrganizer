@@ -182,8 +182,10 @@ BigFilePage::BigFilePage(QWidget* parent) : PageBase(parent) {
     m_dirEdit->setMinimumHeight(36);
     auto* browseBtn = new QPushButton(tr("浏览…"), filterCard);
     browseBtn->setProperty("class", "secondary");
-    browseBtn->setFixedWidth(72);
     browseBtn->setMinimumHeight(36);
+    browseBtn->setMinimumWidth(72);
+    browseBtn->setStyleSheet(
+        QStringLiteral("QPushButton{padding:6px 14px; min-width:72px; border-radius:10px;}"));
     connect(browseBtn, &QPushButton::clicked, this, [this] {
         const QString dir =
             QFileDialog::getExistingDirectory(this, tr("选择扫描目录"), m_dirEdit->text());
@@ -774,15 +776,23 @@ void BigFilePage::renderPage() {
         m_table->horizontalHeader()->setSortIndicator(kColSize, Qt::DescendingOrder);
     {
         bool allChecked = false;
+        int checked = 0;
         if (m_table->rowCount() > 0) {
-            int checked = 0;
             for (int r = 0; r < m_table->rowCount(); ++r) {
                 auto* it = m_table->item(r, kColCheck);
                 if (it && it->checkState() == Qt::Checked) ++checked;
             }
             allChecked = checked == m_table->rowCount();
         }
-        m_headerCheck->setChecked(allChecked);
+        {
+            QSignalBlocker block(m_headerCheck);
+            if (checked == 0)
+                m_headerCheck->setCheckState(Qt::Unchecked);
+            else if (allChecked)
+                m_headerCheck->setCheckState(Qt::Checked);
+            else
+                m_headerCheck->setCheckState(Qt::PartiallyChecked);
+        }
     }
     // 分页栏状态
     const int tp = qMax(1, totalPages());
@@ -823,29 +833,56 @@ void BigFilePage::doDelete() {
         bytes += it.size;
     }
 
-    const auto reply = QMessageBox::question(
-        this, tr("确认删除"),
-        tr("将把 %1 个文件移到回收站（约 %2）。\n系统目录下的文件会被跳过。\n\n确定继续？")
-            .arg(items.size()).arg(formatSize(bytes)),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    const auto reply = [&] {
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("确认删除"));
+        box.setText(tr("即将删除 %1 个文件（约 %2）。").arg(items.size()).arg(formatSize(bytes)));
+        box.setInformativeText(tr("文件将移到回收站；系统保护路径会被跳过。此操作请确认无误。"));
+        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        box.setDefaultButton(QMessageBox::No);
+        box.setWindowModality(Qt::ApplicationModal);
+        if (auto* yes = box.button(QMessageBox::Yes)) yes->setText(tr("确认删除"));
+        if (auto* no = box.button(QMessageBox::No)) no->setText(tr("取消"));
+        return box.exec();
+    }();
     if (reply != QMessageBox::Yes) return;
 
     m_scanBtn->setEnabled(false);
     m_deleteBtn->setEnabled(false);
-    m_progress->setRange(0, 0);
-    m_summary->setText(tr("正在删除 %1 个文件（到回收站）……").arg(items.size()));
+    m_openBtn->setEnabled(false);
+    m_progress->setRange(0, 100);
+    m_progress->setValue(0);
+    m_summary->setText(tr("正在删除 0/%1 …").arg(items.size()));
 
     (void)QtConcurrent::run([this, items]() {
         CleanerService svc;
+        QObject::connect(&svc, &CleanerService::progress, this,
+                         [this, total = items.size()](int percent, const QString& path) {
+            const int done = qBound(0, (percent * total + 99) / 100, total);
+            m_progress->setValue(qBound(0, percent, 100));
+            m_summary->setText(tr("正在删除 %1/%2 … %3")
+                                   .arg(done).arg(total).arg(QFileInfo(path).fileName()));
+        },
+                         Qt::QueuedConnection);
+        int failed = 0;
+        QObject::connect(&svc, &CleanerService::finished, this,
+                         [&failed](qint64, int failedCount) { failed = failedCount; },
+                         Qt::DirectConnection);
         const qint64 freed = svc.clean(items, true);
-        QMetaObject::invokeMethod(this, [this, freed, total = items.size()]() {
-            m_progress->setRange(0, 1);
-            m_progress->setValue(1);
+        QMetaObject::invokeMethod(this, [this, freed, failed, total = items.size()]() {
+            m_progress->setValue(100);
             m_checkedPaths.clear();
-            m_summary->setText(tr("已释放 %1（目标 %2 个），正在刷新列表……")
-                                   .arg(formatSize(freed)).arg(total));
-            LOG << "delete done freed=" << freed << " requested=" << total;
-            m_scanBtn->setEnabled(true);
+            if (failed > 0 && freed <= 0) {
+                m_summary->setText(tr("未能删除（%1 个失败）。pagefile.sys / 休眠文件等系统锁定文件无法删除，请在「系统属性 → 高级 → 性能」中调整虚拟内存。")
+                                       .arg(failed));
+                m_scanBtn->setEnabled(true);
+                updateDeleteButtonState();
+                return;
+            }
+            m_summary->setText(tr("已释放 %1（目标 %2 个，失败 %3），正在重新扫描列表……")
+                                   .arg(formatSize(freed)).arg(total).arg(failed));
+            LOG << "delete done freed=" << freed << " failed=" << failed << " requested=" << total;
             doScan();
         }, Qt::QueuedConnection);
     });

@@ -482,10 +482,10 @@ void MainWindow::refreshDisks() {
         top->addStretch();
         auto* valLabel = new QLabel(rowWidget);
         valLabel->setTextFormat(Qt::RichText);
-        valLabel->setText(tr("<span style='color:%1;font-weight:700;'>%2</span> / %3"
+        valLabel->setText(tr("可用 <span style='color:%1;font-weight:700;'>%2</span> / %3"
                              "&nbsp;&nbsp;<span style='background-color:rgba(0,0,0,0.06);"
-                             "padding:1px 6px;border-radius:6px;font-weight:600;'>%4%</span>")
-                              .arg(c.name(), formatSize(d.totalBytes - d.freeBytes),
+                             "padding:1px 6px;border-radius:6px;font-weight:600;'>已用 %4%</span>")
+                              .arg(c.name(), formatSize(d.freeBytes),
                                    formatSize(d.totalBytes))
                               .arg(ratio * 100, 0, 'f', 1));
         valLabel->setStyleSheet("font-size:12px; color:#6C7A77; background:transparent;");

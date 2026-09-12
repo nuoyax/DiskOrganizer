@@ -13,10 +13,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMap>
+#include <QHash>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -141,7 +143,14 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
     auto* selectAll = new QPushButton(tr("全选建议类别"));
     selectAll->setProperty("class", "secondary");
     connect(selectAll, &QPushButton::clicked, this, [this] {
-        for (auto& c : m_cards) if (c.check) c.check->setChecked(true);
+        const int nCats = int(CleanCategory::CustomRules) + 1;
+        for (int i = 0; i < nCats; ++i) {
+            if (!m_cards[i].check) continue;
+            QSignalBlocker block(m_cards[i].check);
+            m_cards[i].check->setCheckState(Qt::Checked);
+            syncTreeFromCard(i, true);
+        }
+        updateSummary();
     });
     heroTop->addWidget(selectAll);
     hv->addLayout(heroTop);
@@ -192,7 +201,17 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
         top->addLayout(textCol, 1);
         cc.check = new QCheckBox;
         cc.check->setChecked(i < 7);
-        connect(cc.check, &QCheckBox::toggled, this, [this] { updateSummary(); });
+        connect(cc.check, &QCheckBox::stateChanged, this, [this, i](int state) {
+            if (m_updating) return;
+            // 程序同步可能设为 PartiallyChecked；用户点击时不应停在半选
+            if (state == Qt::PartiallyChecked) {
+                QSignalBlocker block(m_cards[i].check);
+                m_cards[i].check->setCheckState(Qt::Checked);
+                syncTreeFromCard(i, true);
+                return;
+            }
+            syncTreeFromCard(i, state == Qt::Checked);
+        });
         top->addWidget(cc.check);
         cv->addLayout(top);
 
@@ -376,6 +395,7 @@ void CleanPage::doScan() {
             }
             m_tree->blockSignals(false);
             m_tree->collapseAll();
+            syncCardsFromTree();
 
             m_headStatus->setText(tr("智能扫描已完成"));
             m_heroState->setText(tr("扫描完成 · 发现 %1 个可清理项").arg(m_items.size()));
@@ -389,6 +409,38 @@ void CleanPage::doScan() {
     });
 }
 
+void CleanPage::syncTreeFromCard(int category, bool checked) {
+    m_updating = true;
+    const Qt::CheckState st = checked ? Qt::Checked : Qt::Unchecked;
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        auto* node = m_tree->topLevelItem(i);
+        if (node->data(0, kRoleCategory).toInt() != category) continue;
+        node->setCheckState(0, st);
+        for (int j = 0; j < node->childCount(); ++j)
+            node->child(j)->setCheckState(0, st);
+        break;
+    }
+    m_updating = false;
+    updateSummary();
+}
+
+void CleanPage::syncCardsFromTree() {
+    QHash<int, Qt::CheckState> states;
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        auto* node = m_tree->topLevelItem(i);
+        states.insert(node->data(0, kRoleCategory).toInt(), node->checkState(0));
+    }
+    const int nCats = int(CleanCategory::CustomRules) + 1;
+    const bool prev = m_updating;
+    m_updating = true;
+    for (int i = 0; i < nCats; ++i) {
+        if (!m_cards[i].check || !states.contains(i)) continue;
+        QSignalBlocker block(m_cards[i].check);
+        m_cards[i].check->setCheckState(states.value(i));
+    }
+    m_updating = prev;
+}
+
 void CleanPage::onItemChanged(QTreeWidgetItem* item, int column) {
     if (m_updating || column != 0) return;
     m_updating = true;
@@ -398,6 +450,7 @@ void CleanPage::onItemChanged(QTreeWidgetItem* item, int column) {
             item->child(i)->setCheckState(0, st == Qt::PartiallyChecked ? Qt::Checked : st);
     }
     m_updating = false;
+    syncCardsFromTree();
     updateSummary();
 }
 

@@ -29,6 +29,8 @@ private slots:
 private:
     void updateSummary();
     void rebuildCategoryCards();
+    void syncTreeFromCard(int category, bool checked);
+    void syncCardsFromTree();
     static QString categoryDisplayName(CleanCategory cat);
 
     // 分类卡片（按 CleanCategory 索引）

@@ -49,6 +49,12 @@ bool isAllowedWindowsJunk(const QString& norm) {
 
 bool isHardBlocked(const QString& norm) {
     if (isAllowedWindowsJunk(norm)) return false;
+    // 活动中的页面文件 / 休眠文件无法删除（系统锁定），勿当可清理项
+    const QString name = QFileInfo(norm).fileName().toLower();
+    if (name == QLatin1String("pagefile.sys")
+        || name == QLatin1String("hiberfil.sys")
+        || name == QLatin1String("swapfile.sys"))
+        return true;
     static const QStringList block = {
         QStringLiteral("C:/Windows"),
         QStringLiteral("C:/ProgramData/Microsoft/Crypto"),
@@ -376,15 +382,22 @@ static bool shellDeleteBatch(const QStringList& paths, bool toRecycleBin) {
     return rc == 0 && !op.fAnyOperationsAborted;
 }
 
+static bool pathStillExists(const QString& path) {
+    return QFileInfo::exists(QDir::toNativeSeparators(QDir::fromNativeSeparators(path)));
+}
+
 static bool deleteOneFallback(const CleanItem& item, bool toRecycleBin) {
     const QString native = QDir::toNativeSeparators(QDir::fromNativeSeparators(item.path));
     const QFileInfo fi(native);
     if (!fi.exists()) return false;
+    bool ok = false;
     if (toRecycleBin) {
-        if (QFile::moveToTrash(native)) return true;
-        return shellDeleteBatch({native}, true);
+        ok = QFile::moveToTrash(native) || shellDeleteBatch({native}, true);
+    } else {
+        ok = fi.isDir() ? QDir(native).removeRecursively() : QFile::remove(native);
     }
-    return fi.isDir() ? QDir(native).removeRecursively() : QFile::remove(native);
+    // Shell API 可能对锁定文件仍返回成功，以是否还存在为准
+    return ok && !pathStillExists(item.path);
 }
 
 qint64 CleanerService::clean(const QList<CleanItem>& items, bool toRecycleBin) {
@@ -404,7 +417,11 @@ qint64 CleanerService::clean(const QList<CleanItem>& items, bool toRecycleBin) {
         }
         const QString norm = QDir::fromNativeSeparators(it.path);
         if (!QFileInfo(QDir::toNativeSeparators(norm)).exists()) { ++failed; continue; }
-        if (isHardBlocked(norm)) { ++skipped; continue; }
+        if (isHardBlocked(norm)) {
+            LOG << "skip protected: " << norm;
+            ++skipped;
+            continue;
+        }
         deletable.append(it);
     }
 
@@ -421,21 +438,22 @@ qint64 CleanerService::clean(const QList<CleanItem>& items, bool toRecycleBin) {
 
         emit progress(done * 100 / qMax(1, total), batchPaths.constFirst());
 
-        if (shellDeleteBatch(batchPaths, toRecycleBin)) {
-            for (int i = start; i < end; ++i)
-                freed += deletable.at(i).size;
-            done = end;
-            continue;
-        }
-
-        // 整批失败时逐项回退，避免一次失败丢整批
+        const bool batchOk = shellDeleteBatch(batchPaths, toRecycleBin);
+        Q_UNUSED(batchOk);
+        // 无论 Shell 返回值如何，以文件是否还存在为准（pagefile 等会假成功）
         for (int i = start; i < end && !m_cancelRequested; ++i) {
             const CleanItem& it = deletable.at(i);
             emit progress((i + 1) * 100 / qMax(1, total), it.path);
-            if (deleteOneFallback(it, toRecycleBin))
+            if (!pathStillExists(it.path)) {
                 freed += it.size;
-            else
+                continue;
+            }
+            if (deleteOneFallback(it, toRecycleBin)) {
+                freed += it.size;
+            } else {
                 ++failed;
+                LOG << "delete failed (locked or protected): " << it.path;
+            }
         }
         done = end;
     }
