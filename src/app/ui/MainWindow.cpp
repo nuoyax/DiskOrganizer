@@ -22,6 +22,7 @@
 #include "FlatStyle.h"
 #include "util/SizeFormatter.h"
 #include "util/FileSystemUtil.h"
+#include <QEvent>
 
 namespace DiskOrganizer {
 
@@ -165,23 +166,91 @@ QWidget* MainWindow::buildOverviewPage() {
     head->addWidget(scanAllBtn);
     v->addLayout(head);
 
-    // 图表卡片（存储池总使用率 + 驱动器空间对比）
-    auto* chartCard = new QFrame(page);
-    chartCard->setProperty("class", "card");
-    auto* cv = new QHBoxLayout(chartCard);
-    cv->setContentsMargins(16, 12, 16, 12);
-    cv->addWidget(m_diskPie = new PieChart, 1);
-    cv->addWidget(m_diskBar = new BarChart, 1);
-    v->addWidget(chartCard);
+    // ===== 卡片区：左「存储池总使用率」环形卡 (5) + 右「驱动器空间对比」条形卡 (7) =====
+    auto* chartsRow = new QHBoxLayout;
+    chartsRow->setSpacing(14);
+
+    // 左卡：总使用率环形 + 各盘已用图例
+    auto* poolCard = new QFrame(page);
+    poolCard->setProperty("class", "card");
+    auto* pv = new QVBoxLayout(poolCard);
+    pv->setContentsMargins(18, 14, 18, 14);
+    pv->setSpacing(8);
+    auto* poolHead = new QHBoxLayout;
+    auto* poolTitleCol = new QVBoxLayout;
+    auto* poolTitle = new QLabel(tr("存储池总使用率"), page);
+    poolTitle->setStyleSheet("color:#6C7A77; font-size:12px; font-weight:600; background:transparent;");
+    m_poolTotal = new QLabel(page); // “3.08 TB / 4.50 TB”
+    m_poolTotal->setStyleSheet("font-size:18px; font-weight:800; color:#181445; background:transparent;");
+    poolTitleCol->addWidget(poolTitle);
+    poolTitleCol->addWidget(m_poolTotal);
+    poolHead->addLayout(poolTitleCol, 1);
+    m_poolPill = new QLabel(page); // 「已用 68.4%」
+    m_poolPill->setStyleSheet(
+        "padding:3px 10px; border-radius:10px; background-color:rgba(245,158,11,0.12);"
+        "color:#92400E; font-size:11px; font-weight:700;");
+    poolHead->addWidget(m_poolPill);
+    pv->addLayout(poolHead);
+
+    auto* poolBody = new QHBoxLayout;
+    poolBody->setSpacing(12);
+    m_diskPie = new PieChart;
+    poolBody->addWidget(m_diskPie, 0);
+    m_pieLegend = new QLabel(page);
+    m_pieLegend->setWordWrap(true);
+    m_pieLegend->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    m_pieLegend->setStyleSheet("color:#181445; font-size:12px; background:transparent;");
+    poolBody->addWidget(m_pieLegend, 1);
+    pv->addLayout(poolBody, 1);
+    chartsRow->addWidget(poolCard, 5);
+
+    // 右卡：各驱动器使用率进度条列表（标题 + 图例说明在 refreshDisks 填充）
+    auto* cmpCard = new QFrame(page);
+    cmpCard->setProperty("class", "card");
+    auto* cvv = new QVBoxLayout(cmpCard);
+    cvv->setContentsMargins(18, 14, 18, 14);
+    cvv->setSpacing(8);
+    auto* cmpHead = new QHBoxLayout;
+    auto* cmpTitleCol = new QVBoxLayout;
+    auto* cmpTitle = new QLabel(tr("驱动器空间对比"), page);
+    cmpTitle->setStyleSheet("color:#6C7A77; font-size:12px; font-weight:600; background:transparent;");
+    m_cmpSubtitle = new QLabel(page); // “N 卷在线分配情况”
+    m_cmpSubtitle->setStyleSheet("font-size:18px; font-weight:800; color:#181445; background:transparent;");
+    cmpTitleCol->addWidget(cmpTitle);
+    cmpTitleCol->addWidget(m_cmpSubtitle);
+    cmpHead->addLayout(cmpTitleCol, 1);
+    auto* unitPill = new QLabel(tr("单位: GB / TB"), page);
+    unitPill->setStyleSheet(
+        "padding:3px 10px; border-radius:10px; background-color:#F4F4F0;"
+        "color:#181445; font-size:11px; font-weight:600;");
+    cmpHead->addWidget(unitPill);
+    cvv->addLayout(cmpHead);
+
+    m_barList = new QVBoxLayout;
+    m_barList->setSpacing(10);
+    cvv->addLayout(m_barList, 1);
+    auto* legendRow = new QHBoxLayout;
+    auto* legend = new QLabel(page); // 图例（refreshDisks 填充，含彩色圆点富文本）
+    legend->setTextFormat(Qt::RichText);
+    legend->setStyleSheet("color:#6C7A77; font-size:11px; background:transparent;");
+    m_barLegend = legend;
+    legendRow->addStretch();
+    auto* cycle = new QLabel(tr("自检周期: 实时"), page);
+    cycle->setStyleSheet("color:#6C7A77; font-size:11px; background:transparent;");
+    legendRow->addWidget(cycle);
+    cvv->addLayout(legendRow);
+    chartsRow->addWidget(cmpCard, 7);
+    v->addLayout(chartsRow);
 
     // 磁盘表卡片
     auto* tableCard = new QFrame(page);
     tableCard->setProperty("class", "card");
     auto* tv = new QVBoxLayout(tableCard);
     tv->setContentsMargins(12, 12, 12, 12);
-    m_diskTable = new QTableWidget(0, 6, this);
+    m_diskTable = new QTableWidget(0, 7, this);
     m_diskTable->setHorizontalHeaderLabels({tr("盘符"), tr("卷标"), tr("文件系统"),
-                                            tr("总容量"), tr("可用空间"), tr("使用率")});
+                                            tr("总容量"), tr("可用空间"), tr("使用率"),
+                                            tr("快捷维护")});
     m_diskTable->horizontalHeader()->setStretchLastSection(true);
     m_diskTable->verticalHeader()->setVisible(false);
     m_diskTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -235,17 +304,119 @@ void MainWindow::refreshDisks() {
         m_diskTable->setItem(i, 5, usageItem);
     }
 
-    // 图表：各磁盘 已用/可用
-    QList<QPair<QString, double>> pie, bar;
+    // 图表：存储池环形（各盘已用）+ 驱动器进度条列表
+    QList<QPair<QString, double>> pie;
+    qint64 poolTotal = 0, poolUsed = 0, poolFree = 0;
     for (const auto& d : disks) {
         if (d.totalBytes <= 0) continue;
         const QString label = d.volumeLabel.isEmpty() ? d.driveLetter : d.driveLetter + " " + d.volumeLabel;
-        pie.append({label + tr(" 已用"), double(d.totalBytes - d.freeBytes)});
-        pie.append({label + tr(" 可用"), double(d.freeBytes)});
-        bar.append({label, double(d.totalBytes - d.freeBytes)});
+        pie.append({label, double(d.totalBytes - d.freeBytes)});
+        poolTotal += d.totalBytes;
+        poolUsed += d.totalBytes - d.freeBytes;
+        poolFree += d.freeBytes;
     }
     m_diskPie->setData(pie);
-    m_diskBar->setData(bar);
+    if (poolTotal > 0) {
+        const double usedRatio = double(poolUsed) / poolTotal;
+        m_poolTotal->setText(tr("%1 / %2").arg(formatSize(poolUsed)).arg(formatSize(poolTotal)));
+        m_poolPill->setText(tr("已用 %1%").arg(usedRatio * 100, 0, 'f', 1));
+        m_diskPie->setCenterLabel(tr("剩余可用"), formatSize(poolFree),
+                                  tr("%1% FREE").arg((1.0 - usedRatio) * 100, 0, 'f', 1));
+        // 环形图例：各盘已用量
+        QString legendHtml;
+        for (int i = 0; i < disks.size(); ++i) {
+            const DiskItem& d = disks[i];
+            if (d.totalBytes <= 0) continue;
+            const QString label = d.volumeLabel.isEmpty() ? d.driveLetter : d.driveLetter + " " + d.volumeLabel;
+            const QColor c = DiskOrganizer::diskSegmentColor(i);
+            legendHtml += tr("<div><span style='color:%1'>●</span> %2 · %3</div>")
+                              .arg(c.name(), label.toHtmlEscaped(),
+                                   formatSize(d.totalBytes - d.freeBytes).toHtmlEscaped());
+        }
+        m_pieLegend->setText(legendHtml);
+    } else {
+        m_poolTotal->setText("—");
+        m_poolPill->setText(tr("无数据"));
+        m_pieLegend->clear();
+    }
+    m_cmpSubtitle->setText(tr("%1 卷在线分配情况").arg(disks.size()));
+
+    // 重建右侧进度条列表
+    while (m_barList->count() > 0) {
+        QLayoutItem* it = m_barList->takeAt(0);
+        if (auto* w = it->widget()) w->deleteLater();
+        delete it;
+    }
+    QString legendHtml;
+    for (int i = 0; i < disks.size(); ++i) {
+        const DiskItem& d = disks[i];
+        if (d.totalBytes <= 0) continue;
+        const double ratio = d.usedRatio();
+        const QColor c = ratio > 0.9 ? QColor("#EF4444")
+                       : ratio > 0.7 ? QColor("#F59E0B")
+                                     : QColor("#10B981");
+        const QString stateText = ratio > 0.9 ? tr("空间紧缺")
+                                : ratio > 0.7 ? tr("预警")
+                                              : tr("充裕");
+        auto* rowWidget = new QWidget(this);
+        auto* row = new QVBoxLayout(rowWidget);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+        auto* top = new QHBoxLayout;
+        top->setSpacing(8);
+        auto* drivePill = new QLabel(d.driveLetter, rowWidget);
+        drivePill->setStyleSheet(
+            "padding:2px 8px; border-radius:6px; background-color:#F4F4F0;"
+            "color:#181445; font-weight:700; font-size:12px;");
+        auto* nameLabel = new QLabel(
+            d.volumeLabel.isEmpty() ? tr("本地磁盘") : d.volumeLabel, rowWidget);
+        nameLabel->setStyleSheet("font-weight:600; color:#181445; background:transparent;");
+        top->addWidget(drivePill);
+        top->addWidget(nameLabel);
+        top->addStretch();
+        auto* valLabel = new QLabel(rowWidget);
+        valLabel->setTextFormat(Qt::RichText);
+        valLabel->setText(tr("<span style='color:%1;font-weight:700;'>%2</span> / %3"
+                             "&nbsp;&nbsp;<span style='background-color:rgba(0,0,0,0.06);"
+                             "padding:1px 6px;border-radius:6px;font-weight:600;'>%4%</span>")
+                              .arg(c.name(), formatSize(d.totalBytes - d.freeBytes),
+                                   formatSize(d.totalBytes))
+                              .arg(ratio * 100, 0, 'f', 1));
+        valLabel->setStyleSheet("font-size:12px; color:#6C7A77; background:transparent;");
+        top->addWidget(valLabel);
+        row->addLayout(top);
+
+        auto* barBg = new QFrame(rowWidget);
+        barBg->setFixedHeight(10);
+        barBg->setStyleSheet(
+            "QFrame{background:#F4F4F0; border-radius:5px; border:1px solid #EFECF7;}");
+        auto* fill = new QFrame(barBg);
+        fill->setStyleSheet(QString("QFrame{background:%1; border-radius:4px; border:none;}").arg(c.name()));
+        fill->setGeometry(1, 1, qMax(2, int((barBg->width() - 2) * ratio)), 8);
+        barBg->installEventFilter(this);
+        m_barFills.append({fill, ratio});
+        row->addWidget(barBg);
+        m_barList->addWidget(rowWidget);
+        Q_UNUSED(stateText)
+    }
+    // 状态图例（富文本彩色圆点）
+    m_barLegend->setText(tr(
+        "<span style='color:#EF4444'>●</span> 空间紧缺 (>90%) &nbsp; "
+        "<span style='color:#F59E0B'>●</span> 预警 (70-90%) &nbsp; "
+        "<span style='color:#10B981'>●</span> 充裕 (<70%)"));
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* ev) {
+    // 进度条背景宽度变化时同步填充条宽度（首次布局尚未定宽）
+    if (ev->type() == QEvent::Resize) {
+        for (const auto& bf : m_barFills) {
+            if (bf.fill->parentWidget() == obj) {
+                const int w = qMax(2, int((bf.fill->parentWidget()->width() - 2) * bf.ratio));
+                bf.fill->resize(w, bf.fill->height());
+            }
+        }
+    }
+    return QMainWindow::eventFilter(obj, ev);
 }
 
 void MainWindow::openDiskInAnalyzer(int row, int column) {

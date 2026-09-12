@@ -17,15 +17,31 @@ static const QColor kPalette[] = {
 };
 static const int kPaletteSize = 12;
 
+QColor diskSegmentColor(int index) {
+    // 与 stitch 稿磁盘环形图一致：红/琥珀/青/靛 循环
+    static const QColor diskColors[] = {
+        QColor(0xEF, 0x44, 0x44), QColor(0xF5, 0x9E, 0x0B),
+        QColor(0x14, 0xB8, 0xA6), QColor(0x4F, 0x46, 0xE5),
+    };
+    return diskColors[index % 4];
+}
+
 // ============ PieChart ============
 PieChart::PieChart(QWidget* parent) : QWidget(parent) {
-    setMinimumSize(260, 220);
+    setMinimumSize(280, 200);
 }
 
 void PieChart::setData(const QList<QPair<QString, double>>& slices) {
     m_slices = slices;
     m_total = 0;
     for (const auto& s : m_slices) m_total += s.second;
+    update();
+}
+
+void PieChart::setCenterLabel(const QString& small, const QString& big, const QString& sub) {
+    m_cSmall = small;
+    m_cBig = big;
+    m_cSub = sub;
     update();
 }
 
@@ -49,7 +65,7 @@ void PieChart::paintEvent(QPaintEvent*) {
         const double frac = slice.second / m_total;
         const double span = frac * 360 * 16;
         p.setPen(Qt::NoPen);
-        p.setBrush(kPalette[idx % kPaletteSize]);
+        p.setBrush(DiskOrganizer::diskSegmentColor(idx));
         p.drawPie(pieRect, int(startAngle), int(-span));
         startAngle -= span;
         ++idx;
@@ -58,11 +74,25 @@ void PieChart::paintEvent(QPaintEvent*) {
     // 中心镂空（甜甜圈效果）
     p.setBrush(palette().window().color());
     p.setPen(Qt::NoPen);
-    p.drawEllipse(center, radius * 0.55, radius * 0.55);
+    p.drawEllipse(center, radius * 0.62, radius * 0.62);
+    // 中心三行文案（剩余可用 / 大数字 / 百分比）
+    p.setPen(QColor(0x6C, 0x7A, 0x77));
+    QFont fSmall = font();
+    fSmall.setPointSizeF(qMax(7.0, font().pointSizeF() * 0.78));
+    p.setFont(fSmall);
+    p.drawText(QRectF(center.x() - radius * 0.6, center.y() - 30, radius * 1.2, 16),
+               Qt::AlignHCenter | Qt::AlignVCenter, m_cSmall);
+    QFont fBig = font();
+    fBig.setPointSizeF(qMax(11.0, font().pointSizeF() * 1.45));
+    fBig.setBold(true);
+    p.setFont(fBig);
     p.setPen(QColor(0x18, 0x14, 0x45));
-    p.setFont(font());
-    p.drawText(QRectF(center.x() - radius * 0.5, center.y() - 14,
-                      radius, 28), Qt::AlignCenter, tr("占比"));
+    p.drawText(QRectF(center.x() - radius * 0.6, center.y() - 14, radius * 1.2, 28),
+               Qt::AlignHCenter | Qt::AlignVCenter, m_cBig);
+    p.setFont(fSmall);
+    p.setPen(QColor(0x00, 0x6B, 0x5F));
+    p.drawText(QRectF(center.x() - radius * 0.6, center.y() + 14, radius * 1.2, 16),
+               Qt::AlignHCenter | Qt::AlignVCenter, m_cSub);
 
     // 图例
     const double lx = pieRect.right() + 18;
@@ -72,7 +102,7 @@ void PieChart::paintEvent(QPaintEvent*) {
     for (const auto& slice : m_slices) {
         if (ly > height() - 12) break;
         p.setPen(Qt::NoPen);
-        p.setBrush(kPalette[idx % kPaletteSize]);
+        p.setBrush(DiskOrganizer::diskSegmentColor(idx));
         p.drawRoundedRect(QRectF(lx, ly + 2, 12, 12), 3, 3);
         p.setPen(QColor(0x18, 0x14, 0x45));
         const double pct = slice.second / m_total * 100;
