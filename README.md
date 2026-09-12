@@ -1,32 +1,37 @@
-# DiskOrganizer 磁盘整理与清理工具
+# DiskOrganizer
 
-Qt6 / C++17 / MSVC /MT 全静态单文件，兼容 Windows 8+。
+Windows 磁盘整理与清理工具。Qt6 / C++17，默认 **/MT + 静态 Qt** 打成单文件，兼容 Windows 8+。
 
-## 核心功能
+## 功能
 
 | 模块 | 说明 |
 |------|------|
-| 概览 | 磁盘饼图 + 空间柱状图 + 磁盘信息表 |
-| 垃圾清理 | 12 类常见垃圾（临时文件/缓存/回收站等），复选框勾选、实时占比图 |
+| 磁盘概览 | 存储池环形图、驱动器空间对比、卷信息表；快捷「清理 / 分析」 |
+| 垃圾清理 | 临时文件、回收站、浏览器缓存等分类扫描与清理；分类卡与明细勾选联动 |
+| 重复文件 | 按大小预筛 + 内容哈希精确比对，智能勾选冗余副本 |
+| 大文件 | 按磁盘 / 体积 / 类型 / 修改时间筛选；系统锁定文件置灰；右键打开目录与详情 |
+| 空间分析 | 目录占比、树状图（Treemap）可视化 |
+| 碎片整理 | 机械盘整理 / SSD TRIM 优化，簇图状态展示 |
 
-| 重复文件 | 按大小预筛 + 哈希精确比对 |
+## 扫描加速
 
-| 大文件 | 按磁盘/大小阈值/扩展名组扫描，12 类型组可搜索下拉；小文件/小目录自动剪枝提速 |
+整卷扫描优先走 NTFS **USN / $MFT** 直读（接近 Everything 路线），失败时再回退：
 
-| 空间分析 | 目录树占比、彩色矩形图 |
-| 碎片整理 | 机械盘 defrag / SSD TRIM 优化 |
+1. **MFT / USN 快速路径** — 枚举记录并解析大小、修改时间；需管理员读卷权限  
+2. **多线程目录遍历** — 一级子目录分片 + `QtConcurrent`  
+3. **大文件过滤** — 并行过滤 + `nth_element` TopN  
 
-## 扫描加速架构（三层）
+无管理员权限时自动降级，不影响基本使用。
 
-1. **USN Journal / MFT 快速路径**：NTFS 整卷扫描走 `FSCTL_ENUM_USN_DATA` 直接枚举 MFT 记录（Everything 同款路线），全盘 100 万文件约 1-3 秒；FRN→路径回溯带缓存。非 NTFS / 无权限时自动回退。
-2. **多线程并行遍历**（回退路径）：一级子目录分片 + `QtConcurrent::blockingMapped`，每核一线程，原子进度计数，取消即时生效。
-3. **大文件过滤加速**：分块并行过滤 + `std::nth_element` TopN（O(n) 选择）。
+## 环境要求
 
-> 注：整卷扫描优先直读原始 $MFT 解析 `$FILE_NAME` 属性，**可同时拿到文件大小与修改时间**；失败时退到纯 USN 枚举（不含 size/mtime），最后才回退并行遍历。
+- Windows 8 及以上（x64）
+- 构建：CMake ≥ 3.21、MSVC、Qt 6.5（Core / Gui / Widgets / Concurrent / Svg）
+- 运行：建议以管理员启动，以启用 USN/MFT 加速
 
 ## 构建
 
-要求：CMake ≥ 3.21、MSVC、Qt 6.5（本地推荐静态库：Core/Gui/Widgets/Concurrent/Svg）。
+本地静态 Qt（推荐，产物无 Qt/CRT DLL）：
 
 ```bash
 cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release \
@@ -34,9 +39,7 @@ cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
-产物：`build/DiskOrganizer.exe` —— **零 Qt / CRT DLL 依赖**（`/MT` 运行时 + 静态 Qt），拷到任何 Win8+ 机器直接运行。
-
-CI / 共享 Qt 构建时关闭静态运行时：
+共享 Qt（动态链接，需关闭静态运行时）：
 
 ```bash
 cmake -B build -G "Visual Studio 17 2022" -A x64 \
@@ -45,24 +48,18 @@ cmake -B build -G "Visual Studio 17 2022" -A x64 \
 cmake --build build --config Release
 ```
 
-## 发版（GitHub Release）
+默认产物：`build/DiskOrganizer.exe`。
 
-推送符合 `vX.Y.Z` 的 tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
+也可使用仓库内的 `build_with_msvc.bat`（需本机已配置 vcvars 与 CMake 路径）。
 
-1. 在 `windows-2022` 安装 Qt 6.5.3 并编译
-2. `windeployqt` 打包 zip：`DiskOrganizer-vX.Y.Z-windows-x64.zip`
-3. 创建 GitHub Release，正文来自 `CHANGELOG.md` 对应版本章节 + 相对上一 tag 的 commit 列表
+## 使用说明
 
-```bash
-# 1. 在 CHANGELOG.md 写好 ## [X.Y.Z] 章节
-# 2. 提交后打 tag 并推送
-git tag v1.0.0
-git push origin v1.0.0
-```
+- 清理 / 删除默认进入**回收站**（可在设置中调整）
+- `pagefile.sys`、`hiberfil.sys`、`swapfile.sys` 等系统锁定文件不可勾选删除
+- 大文件列表支持右键：打开所在文件夹、查看详情、复制路径、单独删除等
+- 概览表双击磁盘行，或点「分析」，进入空间分析
 
-也可在 Actions 里手动运行 **Release** workflow（可选 dry-run：只构建不发版）。
+## 更多
 
-## 使用注意
-
-- USN 快速路径需要**管理员权限**（读卷句柄）；无权限时静默回退并行遍历。
-- 删除/清理操作经回收站（可配置直接删除）。
+- 版本变更见 [CHANGELOG.md](CHANGELOG.md)
+- English: [README_EN.md](README_EN.md)

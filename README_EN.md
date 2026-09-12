@@ -1,33 +1,37 @@
-# DiskOrganizer — Disk Cleanup & Organizer
+# DiskOrganizer
 
-Qt6 / C++17 / MSVC /MT fully-static single executable, Windows 8+.
+Disk cleanup and organizer for Windows. Qt6 / C++17, default **/MT + static Qt** single-file build, Windows 8+.
 
 ## Features
 
 | Module | Description |
 |--------|-------------|
-| Overview | Disk pie chart + space bar chart + drive info table |
-| Junk Clean | 12 junk categories (temp files / caches / recycle bin…), checkboxes, live pie chart |
+| Overview | Storage-pool donut, drive comparison bars, volume table; quick Clean / Analyze |
+| Junk Clean | Temp files, recycle bin, browser caches, and more; category cards sync with the detail tree |
+| Duplicates | Size pre-filter + content hash; smart selection of redundant copies |
+| Big Files | Filter by drive / size / type / age; locked system files grayed out; context menu for folder & details |
+| Space Analyzer | Directory breakdown with treemap |
+| Defrag | HDD defrag / SSD TRIM with cluster map |
 
-| Duplicates | Size pre-filter + exact hash comparison |
+## Scan acceleration
 
-| Big Files | Scan by drive / size threshold / extension group; searchable combo with 12 file-type groups; small files & small dirs pruned for speed |
+Whole-volume scans prefer NTFS **USN / $MFT** (Everything-style). Fallback order:
 
-| Space Analyzer | Directory tree breakdown, colored treemap |
+1. **MFT / USN fast path** — records with size & mtime; needs admin volume access  
+2. **Multi-threaded walk** — first-level shards + `QtConcurrent`  
+3. **Big-file filter** — parallel filter + `nth_element` TopN  
 
-| Defrag | HDD defrag / SSD TRIM optimize |
+Without elevation the app degrades automatically.
 
-## Scan Acceleration Architecture (3 tiers)
+## Requirements
 
-1. **USN Journal / MFT fast path**: whole-volume NTFS scans use `FSCTL_ENUM_USN_DATA` to enumerate MFT records directly (same route as Everything) — a 1M-file volume in ~1-3 s; FRN→path resolution is cached. Falls back automatically on non-NTFS volumes or missing privileges.
-2. **Multi-threaded parallel traversal** (fallback): first-level subdirectories sharded + `QtConcurrent::blockingMapped`, one thread per core, atomic progress counters, instant cancellation.
-3. **Big-file filter acceleration**: chunked parallel filtering + `std::nth_element` TopN selection (O(n)).
-
-> Note: whole-volume scans read the raw $MFT and parse the `$FILE_NAME` attribute first, **providing both file size and modification time**; on failure it falls back to pure USN enumeration (no size/mtime), then to parallel traversal.
+- Windows 8+ (x64)
+- Build: CMake ≥ 3.21, MSVC, Qt 6.5 (Core / Gui / Widgets / Concurrent / Svg)
+- Run as administrator when possible for USN/MFT speedups
 
 ## Build
 
-Requirements: CMake ≥ 3.21, MSVC, Qt 6.5 static libs (Core/Gui/Widgets/Concurrent/Svg).
+Static Qt (recommended — no Qt/CRT DLLs):
 
 ```bash
 cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release \
@@ -35,9 +39,25 @@ cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
-Output: `build/DiskOrganizer.exe` — **zero Qt / CRT DLL dependencies** (`/MT` runtime + static Qt); copy to any Win8+ machine and run.
+Shared Qt:
+
+```bash
+cmake -B build -G "Visual Studio 17 2022" -A x64 \
+      -DDISKORGANIZER_STATIC_RUNTIME=OFF \
+      -DCMAKE_PREFIX_PATH=<path-to-qt>
+cmake --build build --config Release
+```
+
+Output: `build/DiskOrganizer.exe`.
 
 ## Notes
 
-- The USN fast path requires **administrator privileges** (volume handle access); it silently falls back to parallel traversal otherwise.
-- Delete/clean operations go to the recycle bin (permanent delete configurable).
+- Deletes go to the **recycle bin** by default (configurable)
+- Locked system files (`pagefile.sys`, `hiberfil.sys`, `swapfile.sys`) cannot be selected for deletion
+- Big Files: right-click for open folder, details, copy path, delete one
+- Overview: double-click a drive row or use Analyze to open Space Analyzer
+
+## See also
+
+- [CHANGELOG.md](CHANGELOG.md)
+- 中文: [README.md](README.md)

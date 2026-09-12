@@ -1,6 +1,6 @@
 # Changelog
 
-本文档记录 DiskOrganizer 的版本变更。推送形如 `vX.Y.Z` 的 tag 时，GitHub Actions 会自动打包，并把本文件中对应版本章节（若存在）写入 Release 说明。
+本文档记录 DiskOrganizer 的版本变更。发版流程见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
