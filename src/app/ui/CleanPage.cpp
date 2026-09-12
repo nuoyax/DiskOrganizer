@@ -173,6 +173,7 @@ CleanPage::CleanPage(QWidget* parent) : PageBase(parent) {
         auto& cc = m_cards[i];
         cc.card = new QFrame;
         cc.card->setProperty("class", "card");
+        cc.card->setMinimumHeight(104); // 防止滚动区压缩时卡片底行被裁
         auto* cv = new QVBoxLayout(cc.card);
         cv->setContentsMargins(14, 12, 14, 12);
         cv->setSpacing(8);
