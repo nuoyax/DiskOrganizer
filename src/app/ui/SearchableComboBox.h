@@ -22,7 +22,7 @@ public:
 
         // 下拉箭头（chevron）作为行编辑的尾部动作，点击 = showPopup
         m_arrowAction = lineEdit()->addAction(
-            Icons::tinted(QString::fromUtf8(chevronPath), QColor(0x8A, 0x93, 0xA8), 16),
+            Icons::tinted(QString::fromUtf8(chevronPath), QColor(0x6C, 0x7A, 0x77), 16),
             QLineEdit::TrailingPosition);
         m_arrowAction->setToolTip(QComboBox::tr("展开"));
         connect(m_arrowAction, &QAction::triggered, this, [this] {
