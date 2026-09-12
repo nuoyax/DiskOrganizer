@@ -82,8 +82,19 @@ def main() -> int:
     lines.append("")
 
     out = pathlib.Path(args.output)
-    out.write_text("\n".join(lines), encoding="utf-8")
-    print(out.read_text(encoding="utf-8"))
+    body = "\n".join(lines)
+    out.write_text(body, encoding="utf-8")
+    # Windows CI 控制台常为 cp1252，直接 print 中文会 UnicodeEncodeError
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        print(body)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(body.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
+    print(f"Wrote {out.resolve()} ({len(body)} chars)", file=sys.stderr)
     return 0
 
 
