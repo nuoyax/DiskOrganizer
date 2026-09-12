@@ -136,15 +136,36 @@ QWidget* MainWindow::buildOverviewPage() {
     v->setContentsMargins(24, 20, 24, 20);
     v->setSpacing(14);
 
+    // ===== 页头：大标题 + 卷数 pill + 副标题 + 操作按钮 =====
+    auto* head = new QHBoxLayout;
+    auto* headCol = new QVBoxLayout;
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(10);
     auto* header = new QLabel(tr("磁盘概览"), page);
-    header->setProperty("class", "cardTitle");
-    header->setStyleSheet("font-size:20px; font-weight:800; color:#181445; background:transparent;");
-    auto* hint = new QLabel(tr("双击磁盘行进入空间分析"), page);
+    header->setStyleSheet("font-size:24px; font-weight:800; color:#181445; background:transparent;");
+    m_overviewPill = new QLabel(tr("0 卷已装载"), page);
+    m_overviewPill->setStyleSheet(
+        "padding:3px 10px; border-radius:12px; background-color:#E8E6FB; color:#4B41E1;"
+        "font-size:12px; font-weight:600;");
+    titleRow->addWidget(header);
+    titleRow->addWidget(m_overviewPill);
+    titleRow->addStretch();
+    auto* hint = new QLabel(tr("实时检测本地驱动器与卷状态 · 双击磁盘行进入空间分析"), page);
     hint->setProperty("class", "hint");
-    v->addWidget(header);
-    v->addWidget(hint);
+    headCol->addLayout(titleRow);
+    headCol->addWidget(hint);
+    head->addLayout(headCol, 1);
 
-    // 图表卡片
+    auto* scanAllBtn = new QPushButton(Icons::tinted(QString::fromUtf8(Icons::P::scan), QColor("white")),
+                                       tr("立即扫描所有盘"), page);
+    connect(scanAllBtn, &QPushButton::clicked, this, [this] {
+        // 逐盘触发空间分析（切页后由 Analyzer 自行扫描第一盘）
+        m_stack->setCurrentIndex(4);
+    });
+    head->addWidget(scanAllBtn);
+    v->addLayout(head);
+
+    // 图表卡片（存储池总使用率 + 驱动器空间对比）
     auto* chartCard = new QFrame(page);
     chartCard->setProperty("class", "card");
     auto* cv = new QHBoxLayout(chartCard);
@@ -192,6 +213,7 @@ void MainWindow::buildMenus() {
 void MainWindow::refreshDisks() {
     const DiskItemList disks = enumerateDisks();
     m_diskTable->setRowCount(disks.size());
+    m_overviewPill->setText(tr("%1 卷已装载").arg(disks.size()));
     for (int i = 0; i < disks.size(); ++i) {
         const DiskItem& d = disks[i];
         auto setItem = [this, i](int col, const QString& text) {

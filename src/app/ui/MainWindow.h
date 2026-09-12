@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QTableWidget>
 #include <QStackedWidget>
+#include <QLabel>
 
 namespace DiskOrganizer {
 
@@ -29,6 +30,7 @@ private:
 
     QStackedWidget* m_stack = nullptr;
     QTableWidget* m_diskTable = nullptr;
+    QLabel* m_overviewPill = nullptr; // 「N 卷已装载」pill
     PieChart* m_diskPie = nullptr;
     BarChart* m_diskBar = nullptr;
     CleanPage* m_cleanPage = nullptr;
