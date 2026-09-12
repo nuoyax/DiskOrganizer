@@ -50,21 +50,45 @@ private:
         const QMargins m = contentsMargins();
         const int x0 = rect.x() + m.left();
         const int y0 = rect.y() + m.top();
-        int x = x0, y = y0, lineHeight = 0;
         const int hSpace = horizontalSpacing(), vSpace = verticalSpacing();
+        const int maxX = rect.right() - m.right();
+
+        // 先按行分组：超出右边界则折行；行内取最大高度
+        QList<QList<QLayoutItem*>> lines;
+        QList<QLayoutItem*> cur;
+        int curW = 0, curH = 0;
         for (QLayoutItem* item : m_items) {
-            int nextX = x + item->sizeHint().width() + hSpace;
-            if (nextX - hSpace > rect.right() - m.right() && lineHeight > 0) {
-                x = x0;
-                y = y + lineHeight + vSpace;
-                nextX = x + item->sizeHint().width() + hSpace;
-                lineHeight = 0;
+            const int iw = item->sizeHint().width();
+            const int add = cur.isEmpty() ? iw : iw + hSpace;
+            if (!cur.isEmpty() && curW + add > maxX - x0) {
+                lines.append(cur);
+                cur.clear();
+                curW = 0;
+                curH = 0;
             }
-            if (!testOnly) item->setGeometry(QRect(QPoint(x, y), item->sizeHint()));
-            x = nextX;
-            lineHeight = qMax(lineHeight, item->sizeHint().height());
+            curW += cur.isEmpty() ? iw : iw + hSpace;
+            curH = qMax(curH, item->sizeHint().height());
+            cur.append(item);
         }
-        return y + lineHeight - y0 + m.bottom();
+        if (!cur.isEmpty()) lines.append(cur);
+
+        // 逐行摆放：行内控件垂直居中对齐
+        int ly = y0;
+        for (const auto& line : lines) {
+            int rowH = 0;
+            for (QLayoutItem* item : line) rowH = qMax(rowH, item->sizeHint().height());
+            int lx = x0;
+            for (QLayoutItem* item : line) {
+                const QSize sh = item->sizeHint();
+                const int off = (rowH - sh.height()) / 2;
+                if (!testOnly)
+                    item->setGeometry(QRect(QPoint(lx, ly + off), sh));
+                lx += sh.width() + hSpace;
+            }
+            ly += rowH + vSpace;
+        }
+        if (!lines.isEmpty()) ly -= vSpace;
+        return ly + m.bottom() - y0;
     }
     int smartSpacing() const {
         QWidget* parent = parentWidget();
