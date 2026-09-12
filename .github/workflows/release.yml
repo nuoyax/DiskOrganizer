@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只构建打包，不创建 GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build & Publish (Windows x64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v0.0.0-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=${TAG} version=${VER}"
+
+      - name: Install Qt 6.5
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.5.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DDISKORGANIZER_STATIC_RUNTIME=OFF `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build --config Release --target DiskOrganizer
+
+      - name: Locate executable
+        id: exe
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "build/DiskOrganizer.exe",
+            "build/Release/DiskOrganizer.exe",
+            "build/src/app/Release/DiskOrganizer.exe",
+            "build/src/app/DiskOrganizer.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            Get-ChildItem -Path build -Recurse -Filter DiskOrganizer.exe | ForEach-Object { $_.FullName }
+            throw "DiskOrganizer.exe not found"
+          }
+          echo "path=$found" >> $env:GITHUB_OUTPUT
+          Write-Host "Using $found"
+
+      - name: Package with windeployqt
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          $stage = "dist/DiskOrganizer"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "${{ steps.exe.outputs.path }}" "$stage/DiskOrganizer.exe"
+          & windeployqt --release --no-translations --compiler-runtime "$stage/DiskOrganizer.exe"
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed: $LASTEXITCODE" }
+
+          $zip = "DiskOrganizer-$tag-windows-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
+          echo "zip=$zip" >> $env:GITHUB_OUTPUT
+          Get-Item $zip | Format-List Name, Length, FullName
+
+      - name: Build release notes
+        shell: bash
+        run: |
+          python tools/gen_release_notes.py \
+            --tag "${{ steps.ver.outputs.tag }}" \
+            --version "${{ steps.ver.outputs.version }}" \
+            -o release_notes.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiskOrganizer-${{ steps.ver.outputs.tag }}-windows-x64
+          path: DiskOrganizer-${{ steps.ver.outputs.tag }}-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag' && inputs.dry_run != true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: DiskOrganizer ${{ steps.ver.outputs.tag }}
+          body_path: release_notes.md
+          files: DiskOrganizer-${{ steps.ver.outputs.tag }}-windows-x64.zip
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
